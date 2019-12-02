@@ -1,5 +1,4 @@
-use std::net::{SocketAddrV4, Ipv4Addr, Shutdown};
-use std::net::SocketAddr;
+use std::net::{Shutdown};
 use async_std::net::TcpStream;
 use async_std::sync::{channel, Receiver, Sender};
 use async_std::task;
@@ -12,97 +11,6 @@ use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, ALIVE_TIMEOUT_TIM
 use log::{info};
 use time::{get_time, Timespec};
 
-pub enum Destination {
-    Address {
-        address: SocketAddr
-    },
-    DomainName {
-        name: Vec<u8>,
-        port: u16,
-    },
-    Unknown,
-}
-
-
-const VER: u8 = 5;
-const RSV: u8 = 0;
-
-const CMD_CONNECT: u8 = 1;
-const METHOD_NO_AUTH: u8 = 0;
-const METHOD_NO_ACCEPT: u8 = 0xFF;
-
-const ATYP_IPV4: u8 = 1;
-const ATYP_DOMAINNAME: u8 = 3;
-const ATYP_IPV6: u8 = 4;
-
-
-async fn respond(stream: &mut TcpStream, method: u8) -> std::io::Result<()> {
-    let buf = [VER, method];
-    stream.write_all(&buf).await
-}
-
-
-pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destination> {
-    let mut buf = [0u8; 2];
-    stream.read_exact(&mut buf).await?;
-
-    if buf[0] != VER {
-        respond(stream, METHOD_NO_ACCEPT).await?;
-        return Ok(Destination::Unknown);
-    }
-
-    let mut methods = vec![0; buf[1] as usize];
-    stream.read_exact(&mut methods).await?;
-
-    if !methods.into_iter().any(|method| method == METHOD_NO_AUTH) {
-        respond(stream, METHOD_NO_ACCEPT).await?;
-        return Ok(Destination::Unknown);
-    }
-
-    respond(stream, METHOD_NO_AUTH).await?;
-
-    let mut buf = [0u8; 4];
-    stream.read_exact(&mut buf).await?;
-
-
-    if buf[1] != CMD_CONNECT {
-        return Ok(Destination::Unknown);
-    }
-
-    let destination = match buf[3] {
-        ATYP_IPV4 => {
-            let mut ipv4_addr = [0u8; 6];
-            stream.read_exact(&mut ipv4_addr).await?;
-
-            let port = unsafe { *(ipv4_addr.as_ptr().offset(4) as *const u16) };
-            Destination::Address {
-                address: SocketAddr::V4(SocketAddrV4::new(
-                    Ipv4Addr::new(ipv4_addr[3], ipv4_addr[2], ipv4_addr[1], ipv4_addr[0]),
-                    u16::from_be(port),
-                ))
-            }
-        }
-
-        ATYP_DOMAINNAME => {
-            let mut len = [0u8; 1];
-            stream.read_exact(&mut len).await?;
-
-            let len = len[0] as usize;
-            let mut buf = vec![0u8; len + 2];
-            stream.read_exact(&mut buf).await?;
-
-            let port = unsafe { *(buf.as_ptr().offset(len as isize) as *const u16) };
-            buf.truncate(len);
-            Destination::DomainName { name: buf, port: u16::from_be(port) }
-        }
-
-        ATYP_IPV6 => Destination::Unknown,
-        _ => Destination::Unknown,
-    };
-
-    Ok(destination)
-}
-
 
 pub struct Tunnel {
     entry_id_current: u32,
@@ -111,7 +19,7 @@ pub struct Tunnel {
 
 
 impl Tunnel {
-    pub async fn new_entry(&mut self) -> Entry {
+    pub async fn open_entry(&mut self) -> Entry {
         let entry_id = self.entry_id_current;
         self.entry_id_current += 1;
         let (entry_sender, entry_receiver) = channel(999);
@@ -143,7 +51,7 @@ impl Entry {
         self.tunnel_sender.send(Message::CSData(self.id, buf)).await;
     }
 
-    pub async fn connect_ip(&self, address: Vec<u8>) {
+    pub async fn connect_address(&self, address: Vec<u8>) {
         self.tunnel_sender.send(Message::CSConnectIp(self.id, address)).await;
     }
 
@@ -513,7 +421,7 @@ enum Message {
     EntryClose(u32),
 }
 
-enum EntryMessage {
+pub enum EntryMessage {
     ConnectOk(Vec<u8>),
     Data(Vec<u8>),
     ShutdownWrite,

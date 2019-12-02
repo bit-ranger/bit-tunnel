@@ -1,5 +1,5 @@
 [package]
-name = "bit-tunnel"
+name = "client"
 version = "0.1.0"
 authors = ["bit-ranger <sincerebravefight@gmail.com>"]
 edition = "2018"
@@ -13,5 +13,6 @@ license = "MIT"
 common = {path="../common"}
 async-std = { version = "1.2.0", features = ["unstable"] }
 futures-timer = "1.0.2"
-log = "0.4.8"
+log = { version = "0.4.8", features = ["std"] }
 time = "0.1.42"
+getopts = "0.2.21"
