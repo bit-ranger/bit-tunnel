@@ -5,8 +5,12 @@ use async_std::sync::{channel, Receiver, Sender};
 use async_std::task;
 use std::time::Duration;
 use async_std::io::{Read, Write};
+use async_std::prelude::*;
 use std::collections::HashMap;
 use super::timer;
+use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, ALIVE_TIMEOUT_TIME_MS, pack_cs_heartbeat_msg, pack_cs_open_port_msg, pack_cs_connect_msg, pack_cs_connect_domain_msg, pack_cs_shutdown_write_msg, pack_cs_data_msg, pack_cs_close_port_msg};
+use log::{info};
+use time::{get_time, Timespec};
 
 pub enum Destination {
     Address {
@@ -116,7 +120,7 @@ impl Tunnel {
         (
             Entry {
                 id: entry_id,
-                tunnel_sender: self.sender,
+                tunnel_sender: self.sender.clone(),
                 entry_receiver,
             }
         )
@@ -170,6 +174,7 @@ pub struct TcpTunnel;
 impl TcpTunnel {
     pub fn new(tunnel_id: u32, server_address: String) -> Tunnel {
         let (s, r) = channel(10000);
+        let s1 = s.clone();
 
         task::spawn(async move {
             loop {
@@ -184,7 +189,7 @@ impl TcpTunnel {
 
         Tunnel {
             entry_id_current: 1,
-            sender: s.clone(),
+            sender: s1,
         }
     }
 
@@ -204,12 +209,13 @@ impl TcpTunnel {
         };
 
         let mut entry_map = EntryMap::new();
+        let (server_stream0, server_stream1) = &mut (&server_stream, &server_stream);
         let r = async {
-            let _ = server_stream_to_tunnel(server_stream, tunnel_sender.clone()).await;
+            let _ = server_stream_to_tunnel(server_stream0, tunnel_sender.clone()).await;
             let _ = server_stream.shutdown(Shutdown::Both);
         };
         let w = async {
-            let _ = tunnel_to_server_stream(tunnel_id, tunnel_receiver.clone(), &mut entry_map, server_stream).await;
+            let _ = tunnel_to_server_stream(tunnel_id, tunnel_receiver.clone(), &mut entry_map, server_stream1).await;
             let _ = server_stream.shutdown(Shutdown::Both);
         };
         let _ = r.join(w).await;
@@ -228,8 +234,6 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
     server_stream: &mut R,
     tunnel_sender: Sender<Message>,
 ) -> std::io::Result<()> {
-    let mut ctr = vec![0; CTR_SIZE];
-    server_stream.read_exact(&mut ctr).await?;
 
     loop {
         let mut op = [0u8; 1];
@@ -262,7 +266,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
                 let mut buf = vec![0; len as usize];
                 server_stream.read_exact(&mut buf).await?;
 
-                let data = decryptor.decrypt(&buf);
+                let data = buf;
 
                 if op == sc::CONNECT_OK {
                     tunnel_sender.send(Message::SCConnectOk(id, data)).await;
@@ -285,15 +289,13 @@ async fn tunnel_to_server_stream<W: Write + Unpin>(
     entry_map: &mut EntryMap,
     server_stream: &mut W,
 ) -> std::io::Result<()> {
-    let mut encryptor = Cryptor::new(&key);
     let mut alive_time = get_time();
 
     let duration = Duration::from_millis(HEARTBEAT_INTERVAL_MS as u64);
     let timer_stream = timer::interval(duration, Message::Heartbeat);
     let mut msg_stream = timer_stream.merge(tunnel_receiver);
 
-    server_stream.write_all(encryptor.ctr_as_slice()).await?;
-    server_stream.write_all(&encryptor.encrypt(&VERIFY_DATA)).await?;
+    server_stream.write_all(&VERIFY_DATA).await?;
 
     loop {
         match msg_stream.next().await {
@@ -341,7 +343,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
         }
 
         Message::CSConnectIp(id, buf) => {
-            let data = encryptor.encrypt(&buf);
+            let data = buf;
             server_stream.write_all(&pack_cs_connect_msg(id, &data)).await?;
         }
 
@@ -354,8 +356,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 value.port = port;
             }
 
-            let data = encryptor.encrypt(&buf);
-            let packed_buffer = pack_cs_connect_domain_msg(id, &data, port);
+            let packed_buffer = pack_cs_connect_domain_msg(id, &buf, port);
             server_stream.write_all(&packed_buffer).await?;
         }
 
@@ -377,8 +378,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
         }
 
         Message::CSData(id, buf) => {
-            let data = encryptor.encrypt(&buf);
-            server_stream.write_all(&pack_cs_data_msg(id, &data)).await?;
+            server_stream.write_all(&pack_cs_data_msg(id, &buf)).await?;
         }
 
         Message::CSEntryClose(id) => {
