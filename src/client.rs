@@ -6,6 +6,7 @@ use async_std::task;
 use std::time::Duration;
 use async_std::io::{Read, Write};
 use std::collections::HashMap;
+use super::timer;
 
 pub enum Destination {
     Address {
@@ -31,7 +32,7 @@ const ATYP_DOMAINNAME: u8 = 3;
 const ATYP_IPV6: u8 = 4;
 
 
-async fn respond_reject(stream: &mut TcpStream, method: u8) -> std::io::Result<()> {
+async fn respond(stream: &mut TcpStream, method: u8) -> std::io::Result<()> {
     let buf = [VER, method];
     stream.write_all(&buf).await
 }
@@ -42,7 +43,7 @@ pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destina
     stream.read_exact(&mut buf).await?;
 
     if buf[0] != VER {
-        respond_reject(stream, METHOD_NO_ACCEPT).await?;
+        respond(stream, METHOD_NO_ACCEPT).await?;
         return Ok(Destination::Unknown);
     }
 
@@ -50,11 +51,11 @@ pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destina
     stream.read_exact(&mut methods).await?;
 
     if !methods.into_iter().any(|method| method == METHOD_NO_AUTH) {
-        respond_reject(stream, METHOD_NO_ACCEPT).await?;
+        respond(stream, METHOD_NO_ACCEPT).await?;
         return Ok(Destination::Unknown);
     }
 
-    respond_reject(stream, METHOD_NO_AUTH).await?;
+    respond(stream, METHOD_NO_AUTH).await?;
 
     let mut buf = [0u8; 4];
     stream.read_exact(&mut buf).await?;
@@ -99,13 +100,407 @@ pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destina
 }
 
 
+pub struct Tunnel {
+    entry_id_current: u32,
+    sender: Sender<Message>,
+}
+
+
+impl Tunnel {
+    pub async fn new_entry(&mut self) -> Entry {
+        let entry_id = self.entry_id_current;
+        self.entry_id_current += 1;
+        let (entry_sender, entry_receiver) = channel(999);
+        self.sender.send(Message::CSEntryOpen(entry_id, entry_sender)).await;
+
+        (
+            Entry {
+                id: entry_id,
+                tunnel_sender: self.sender,
+                entry_receiver,
+            }
+        )
+    }
+}
+
+
+pub struct Entry {
+    id: u32,
+    tunnel_sender: Sender<Message>,
+    entry_receiver: Receiver<EntryMessage>,
+}
+
+impl Entry {
+    pub async fn drop(&self) {
+        self.tunnel_sender.send(Message::EntryClose(self.id)).await;
+    }
+
+    pub async fn write(&self, buf: Vec<u8>) {
+        self.tunnel_sender.send(Message::CSData(self.id, buf)).await;
+    }
+
+    pub async fn connect_ip(&self, address: Vec<u8>) {
+        self.tunnel_sender.send(Message::CSConnectIp(self.id, address)).await;
+    }
+
+    pub async fn connect_domain_name(&self, domain_name: Vec<u8>, port: u16) {
+        self.tunnel_sender
+            .send(Message::CSConnectDomainName(self.id, domain_name, port))
+            .await;
+    }
+
+    pub async fn shutdown_write(&self) {
+        self.tunnel_sender.send(Message::CSShutdownWrite(self.id)).await;
+    }
+
+    pub async fn close(&self) {
+        self.tunnel_sender.send(Message::CSEntryClose(self.id)).await;
+    }
+
+    pub async fn read(&self) -> EntryMessage {
+        match self.entry_receiver.recv().await {
+            Some(msg) => msg,
+            None => EntryMessage::Close,
+        }
+    }
+}
+
+pub struct TcpTunnel;
+
+impl TcpTunnel {
+    pub fn new(tunnel_id: u32, server_address: String) -> Tunnel {
+        let (s, r) = channel(10000);
+
+        task::spawn(async move {
+            loop {
+                TcpTunnel::task(
+                    tunnel_id,
+                    server_address.clone(),
+                    s.clone(),
+                    r.clone(),
+                ).await;
+            }
+        });
+
+        Tunnel {
+            entry_id_current: 1,
+            sender: s.clone(),
+        }
+    }
+
+    async fn task(
+        tunnel_id: u32,
+        server_address: String,
+        tunnel_sender: Sender<Message>,
+        tunnel_receiver: Receiver<Message>,
+    ) {
+        let server_stream = match TcpStream::connect(&server_address).await {
+            Ok(server_stream) => server_stream,
+
+            Err(_) => {
+                task::sleep(Duration::from_millis(1000)).await;
+                return;
+            }
+        };
+
+        let mut entry_map = EntryMap::new();
+        let r = async {
+            let _ = server_stream_to_tunnel(server_stream, tunnel_sender.clone()).await;
+            let _ = server_stream.shutdown(Shutdown::Both);
+        };
+        let w = async {
+            let _ = tunnel_to_server_stream(tunnel_id, tunnel_receiver.clone(), &mut entry_map, server_stream).await;
+            let _ = server_stream.shutdown(Shutdown::Both);
+        };
+        let _ = r.join(w).await;
+
+        info!("Tcp tunnel {} broken", tunnel_id);
+
+        for (_, value) in entry_map.iter() {
+            value.sender.send(EntryMessage::Close).await;
+        }
+    }
+}
+
+
+///从server_stream读数据, 向tunnel写数据
+async fn server_stream_to_tunnel<R: Read + Unpin>(
+    server_stream: &mut R,
+    tunnel_sender: Sender<Message>,
+) -> std::io::Result<()> {
+    let mut ctr = vec![0; CTR_SIZE];
+    server_stream.read_exact(&mut ctr).await?;
+
+    loop {
+        let mut op = [0u8; 1];
+        server_stream.read_exact(&mut op).await?;
+        let op = op[0];
+
+        if op == sc::HEARTBEAT_RSP {
+            tunnel_sender.send(Message::SCHeartbeat).await;
+            continue;
+        }
+
+        let mut id = [0u8; 4];
+        server_stream.read_exact(&mut id).await?;
+        let id = u32::from_be(unsafe { *(id.as_ptr() as *const u32) });
+
+        match op {
+            sc::CLOSE_PORT => {
+                tunnel_sender.send(Message::SCClosePort(id)).await;
+            }
+
+            sc::SHUTDOWN_WRITE => {
+                tunnel_sender.send(Message::SCShutdownWrite(id)).await;
+            }
+
+            sc::CONNECT_OK | sc::DATA => {
+                let mut len = [0u8; 4];
+                server_stream.read_exact(&mut len).await?;
+                let len = u32::from_be(unsafe { *(len.as_ptr() as *const u32) });
+
+                let mut buf = vec![0; len as usize];
+                server_stream.read_exact(&mut buf).await?;
+
+                let data = decryptor.decrypt(&buf);
+
+                if op == sc::CONNECT_OK {
+                    tunnel_sender.send(Message::SCConnectOk(id, data)).await;
+                } else {
+                    tunnel_sender.send(Message::SCData(id, data)).await;
+                }
+            }
+
+            _ => break,
+        }
+    }
+
+    Ok(())
+}
+
+///从channel读数据, 向tunnel写数据
+async fn tunnel_to_server_stream<W: Write + Unpin>(
+    tunnel_id: u32,
+    tunnel_receiver: Receiver<Message>,
+    entry_map: &mut EntryMap,
+    server_stream: &mut W,
+) -> std::io::Result<()> {
+    let mut encryptor = Cryptor::new(&key);
+    let mut alive_time = get_time();
+
+    let duration = Duration::from_millis(HEARTBEAT_INTERVAL_MS as u64);
+    let timer_stream = timer::interval(duration, Message::Heartbeat);
+    let mut msg_stream = timer_stream.merge(tunnel_receiver);
+
+    server_stream.write_all(encryptor.ctr_as_slice()).await?;
+    server_stream.write_all(&encryptor.encrypt(&VERIFY_DATA)).await?;
+
+    loop {
+        match msg_stream.next().await {
+            Some(Message::Heartbeat) => {
+                let duration = get_time() - alive_time;
+                if duration.num_milliseconds() > ALIVE_TIMEOUT_TIME_MS {
+                    break;
+                }
+
+                server_stream.write_all(&pack_cs_heartbeat_msg()).await?;
+            }
+
+            Some(msg) => {
+                process_tunnel_message(tunnel_id, msg, &mut alive_time, entry_map, server_stream)
+                    .await?;
+            }
+
+            None => break,
+        }
+    }
+
+    Ok(())
+}
+
+async fn process_tunnel_message<W: Write + Unpin>(
+    tid: u32,
+    msg: Message,
+    alive_time: &mut Timespec,
+    entry_map: &mut EntryMap,
+    server_stream: &mut W,
+) -> std::io::Result<()> {
+    match msg {
+        Message::CSEntryOpen(id, entry_sender) => {
+            entry_map.insert(
+                id,
+                EntryInternal {
+                    count: 2,
+                    sender: entry_sender,
+                    host: String::new(),
+                    port: 0,
+                },
+            );
+
+            server_stream.write_all(&pack_cs_open_port_msg(id)).await?;
+        }
+
+        Message::CSConnectIp(id, buf) => {
+            let data = encryptor.encrypt(&buf);
+            server_stream.write_all(&pack_cs_connect_msg(id, &data)).await?;
+        }
+
+        Message::CSConnectDomainName(id, buf, port) => {
+            let host = String::from_utf8(buf.clone()).unwrap_or(String::new());
+            info!("{}.{}: connecting {}:{}", tid, id, host, port);
+
+            if let Some(value) = entry_map.get_mut(&id) {
+                value.host = host;
+                value.port = port;
+            }
+
+            let data = encryptor.encrypt(&buf);
+            let packed_buffer = pack_cs_connect_domain_msg(id, &data, port);
+            server_stream.write_all(&packed_buffer).await?;
+        }
+
+        Message::CSShutdownWrite(id) => {
+            match entry_map.get(&id) {
+                Some(entry) => {
+                    info!(
+                        "{}.{}: client shutdown write {}:{}",
+                        tid, id, entry.host, entry.port
+                    );
+                }
+
+                None => {
+                    info!("{}.{}: client shutdown write unknown server", tid, id);
+                }
+            }
+
+            server_stream.write_all(&pack_cs_shutdown_write_msg(id)).await?;
+        }
+
+        Message::CSData(id, buf) => {
+            let data = encryptor.encrypt(&buf);
+            server_stream.write_all(&pack_cs_data_msg(id, &data)).await?;
+        }
+
+        Message::CSEntryClose(id) => {
+            match entry_map.get(&id) {
+                Some(value) => {
+                    info!("{}.{}: client close {}:{}", tid, id, value.host, value.port);
+                    value.sender.send(EntryMessage::Close).await;
+                    server_stream.write_all(&pack_cs_close_port_msg(id)).await?;
+                }
+
+                None => {
+                    info!("{}.{}: client close unknown server", tid, id);
+                }
+            }
+
+            entry_map.remove(&id);
+        }
+
+        Message::SCHeartbeat => {
+            *alive_time = get_time();
+        }
+
+        Message::SCClosePort(id) => {
+            *alive_time = get_time();
+
+            match entry_map.get(&id) {
+                Some(value) => {
+                    info!("{}.{}: server close {}:{}", tid, id, value.host, value.port);
+
+                    value.sender.send(EntryMessage::Close).await;
+                }
+
+                None => {
+                    info!("{}.{}: server close unknown client", tid, id);
+                }
+            }
+
+            entry_map.remove(&id);
+        }
+
+        Message::SCShutdownWrite(id) => {
+            *alive_time = get_time();
+
+            match entry_map.get(&id) {
+                Some(entry) => {
+                    info!(
+                        "{}.{}: server shutdown write {}:{}",
+                        tid, id, entry.host, entry.port
+                    );
+
+                    entry.sender.send(EntryMessage::ShutdownWrite).await;
+                }
+
+                None => {
+                    info!("{}.{}: server shutdown write unknown client", tid, id);
+                }
+            }
+        }
+
+        Message::SCConnectOk(id, buf) => {
+            *alive_time = get_time();
+
+            match entry_map.get(&id) {
+                Some(value) => {
+                    info!("{}.{}: connect {}:{} ok", tid, id, value.host, value.port);
+
+                    value.sender.send(EntryMessage::ConnectOk(buf)).await;
+                }
+
+                None => {
+                    info!("{}.{}: connect unknown server ok", tid, id);
+                }
+            }
+        }
+
+        //向channel写数据
+        Message::SCData(id, buf) => {
+            *alive_time = get_time();
+            if let Some(value) = entry_map.get(&id) {
+                value.sender.send(EntryMessage::Data(buf)).await;
+            };
+        }
+
+        Message::EntryClose(id) => {
+            if let Some(value) = entry_map.get_mut(&id) {
+                value.count = value.count - 1;
+                if value.count == 0 {
+                    info!(
+                        "{}.{}: drop tunnel port {}:{}",
+                        tid, id, value.host, value.port
+                    );
+                    entry_map.remove(&id);
+                }
+            } else {
+                info!("{}.{}: drop unknown tunnel port", tid, id);
+            }
+        }
+
+        _ => {}
+    }
+
+    Ok(())
+}
+
+
+type EntryMap = HashMap<u32, EntryInternal>;
+
+struct EntryInternal {
+    host: String,
+    port: u16,
+    count: u32,
+    sender: Sender<EntryMessage>,
+}
+
+
 #[derive(Clone)]
-enum TunnelMsg {
-    CSOpenPort(u32, Sender<TunnelPortMsg>),
-    CSConnect(u32, Vec<u8>),
-    CSConnectDN(u32, Vec<u8>, u16),
+enum Message {
+    CSEntryOpen(u32, Sender<EntryMessage>),
+    CSEntryClose(u32),
+    CSConnectIp(u32, Vec<u8>),
+    CSConnectDomainName(u32, Vec<u8>, u16),
     CSShutdownWrite(u32),
-    CSClosePort(u32),
     CSData(u32, Vec<u8>),
 
     SCHeartbeat,
@@ -115,93 +510,14 @@ enum TunnelMsg {
     SCData(u32, Vec<u8>),
 
     Heartbeat,
-    TunnelPortDrop(u32),
+    EntryClose(u32),
 }
 
-pub enum TunnelPortMsg {
+enum EntryMessage {
     ConnectOk(Vec<u8>),
     Data(Vec<u8>),
     ShutdownWrite,
-    ClosePort,
+    Close,
 }
 
-pub struct TunnelWritePort {
-    tunnel_id: u32,
-    core_sender: Sender<TunnelMsg>,
-}
 
-pub struct TunnelReadPort {
-    tunnel_id: u32,
-    core_sender: Sender<TunnelMsg>,
-    tunnel_receiver: Receiver<TunnelPortMsg>,
-}
-
-impl TunnelWritePort {
-    pub async fn write(&self, buf: Vec<u8>) {
-        self.core_sender.send(TunnelMsg::CSData(self.tunnel_id, buf)).await;
-    }
-
-    pub async fn connect(&self, address: Vec<u8>) {
-        self.core_sender.send(TunnelMsg::CSConnect(self.tunnel_id, address)).await;
-    }
-
-    pub async fn connect_domain_name(&self, domain_name: Vec<u8>, port: u16) {
-        self.core_sender
-            .send(TunnelMsg::CSConnectDN(self.tunnel_id, domain_name, port))
-            .await;
-    }
-
-    pub async fn shutdown_write(&self) {
-        self.core_sender.send(TunnelMsg::CSShutdownWrite(self.tunnel_id)).await;
-    }
-
-    pub async fn close(&self) {
-        self.core_sender.send(TunnelMsg::CSClosePort(self.tunnel_id)).await;
-    }
-
-    pub async fn drop(&self) {
-        self.core_sender.send(TunnelMsg::TunnelPortDrop(self.tunnel_id)).await;
-    }
-}
-
-impl TunnelReadPort {
-    pub async fn read(&self) -> TunnelPortMsg {
-        match self.tunnel_receiver.recv().await {
-            Some(msg) => msg,
-            None => TunnelPortMsg::ClosePort,
-        }
-    }
-
-    pub async fn drop(&self) {
-        self.core_sender.send(TunnelMsg::TunnelPortDrop(self.tunnel_id)).await;
-    }
-}
-
-pub struct Tunnel {
-    id: u32,
-    core_sender: Sender<TunnelMsg>,
-}
-
-impl Tunnel {
-    pub async fn open_port(&mut self) -> (TunnelWritePort, TunnelReadPort) {
-        let core_tx1 = self.core_sender.clone();
-        let core_tx2 = self.core_sender.clone();
-        let id = self.id;
-        self.id += 1;
-
-        let (ts, tr) = channel(999);
-        self.core_sender.send(TunnelMsg::CSOpenPort(id, ts)).await;
-
-        (
-            TunnelWritePort {
-                tunnel_id: id,
-                core_sender: core_tx1,
-            },
-            TunnelReadPort {
-                tunnel_id: id,
-                core_sender: core_tx2,
-                tunnel_receiver: tr,
-            },
-        )
-    }
-}
