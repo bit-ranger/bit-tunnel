@@ -18,7 +18,7 @@ async fn local_stream_to_entry(local_stream: &mut &TcpStream, entry: &Entry) {
         match local_stream.read(&mut buf).await {
             Ok(0) => {
                 let _ = local_stream.shutdown(Shutdown::Read);
-                entry.shutdown_write().await;
+                entry.eof().await;
                 break;
             }
 
@@ -41,7 +41,7 @@ async fn entry_to_local_stream(entry: &Entry, local_stream: &mut &TcpStream) {
         let buf = match entry.read().await {
             EntryMessage::Data(buf) => buf,
 
-            EntryMessage::ShutdownWrite => {
+            EntryMessage::Eof => {
                 let _ = local_stream.shutdown(Shutdown::Write);
                 break;
             }

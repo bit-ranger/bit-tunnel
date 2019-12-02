@@ -7,7 +7,8 @@ use async_std::io::{Read, Write};
 use async_std::prelude::*;
 use std::collections::HashMap;
 use super::timer;
-use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, ALIVE_TIMEOUT_TIME_MS, pack_cs_heartbeat_msg, pack_cs_open_port_msg, pack_cs_connect_msg, pack_cs_connect_domain_msg, pack_cs_shutdown_write_msg, pack_cs_data_msg, pack_cs_close_port_msg};
+use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
+//use common::protocol::{ALIVE_TIMEOUT_TIME_MS};
 use log::{info};
 use time::{get_time, Timespec};
 
@@ -61,8 +62,8 @@ impl Entry {
             .await;
     }
 
-    pub async fn shutdown_write(&self) {
-        self.tunnel_sender.send(Message::CSShutdownWrite(self.id)).await;
+    pub async fn eof(&self) {
+        self.tunnel_sender.send(Message::CSEof(self.id)).await;
     }
 
     pub async fn close(&self) {
@@ -162,8 +163,8 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
                 tunnel_sender.send(Message::SCClosePort(id)).await;
             }
 
-            sc::SHUTDOWN_WRITE => {
-                tunnel_sender.send(Message::SCShutdownWrite(id)).await;
+            sc::EOF => {
+                tunnel_sender.send(Message::SCEof(id)).await;
             }
 
             sc::CONNECT_OK | sc::DATA => {
@@ -208,12 +209,16 @@ async fn tunnel_to_server_stream<W: Write + Unpin>(
     loop {
         match msg_stream.next().await {
             Some(Message::Heartbeat) => {
-                let duration = get_time() - alive_time;
-                if duration.num_milliseconds() > ALIVE_TIMEOUT_TIME_MS {
-                    break;
-                }
-
-                server_stream.write_all(&pack_cs_heartbeat_msg()).await?;
+                //空闲时间超过ALIVE_TIMEOUT_TIME_MS, 结束tunnel_to_server_stream
+                //tunnel结束后, 缺少机制增加tunnel
+                //@see client/src/bin/client.rs:112
+                //所以此处不结束tunnel
+//                let duration = get_time() - alive_time;
+//
+//                if duration.num_milliseconds() > ALIVE_TIMEOUT_TIME_MS {
+//                    break;
+//                }
+                server_stream.write_all(&pack_cs_heartbeat()).await?;
             }
 
             Some(msg) => {
@@ -247,12 +252,12 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 },
             );
 
-            server_stream.write_all(&pack_cs_open_port_msg(id)).await?;
+            server_stream.write_all(&pack_cs_entry_open(id)).await?;
         }
 
         Message::CSConnectIp(id, buf) => {
             let data = buf;
-            server_stream.write_all(&pack_cs_connect_msg(id, &data)).await?;
+            server_stream.write_all(&pack_cs_connect(id, &data)).await?;
         }
 
         Message::CSConnectDomainName(id, buf, port) => {
@@ -264,11 +269,11 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 value.port = port;
             }
 
-            let packed_buffer = pack_cs_connect_domain_msg(id, &buf, port);
+            let packed_buffer = pack_cs_connect_domain_name(id, &buf, port);
             server_stream.write_all(&packed_buffer).await?;
         }
 
-        Message::CSShutdownWrite(id) => {
+        Message::CSEof(id) => {
             match entry_map.get(&id) {
                 Some(entry) => {
                     info!(
@@ -282,11 +287,11 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 }
             }
 
-            server_stream.write_all(&pack_cs_shutdown_write_msg(id)).await?;
+            server_stream.write_all(&pack_cs_eof(id)).await?;
         }
 
         Message::CSData(id, buf) => {
-            server_stream.write_all(&pack_cs_data_msg(id, &buf)).await?;
+            server_stream.write_all(&pack_cs_data(id, &buf)).await?;
         }
 
         Message::CSEntryClose(id) => {
@@ -294,7 +299,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 Some(value) => {
                     info!("{}.{}: client close {}:{}", tid, id, value.host, value.port);
                     value.sender.send(EntryMessage::Close).await;
-                    server_stream.write_all(&pack_cs_close_port_msg(id)).await?;
+                    server_stream.write_all(&pack_cs_entry_close(id)).await?;
                 }
 
                 None => {
@@ -327,7 +332,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
             entry_map.remove(&id);
         }
 
-        Message::SCShutdownWrite(id) => {
+        Message::SCEof(id) => {
             *alive_time = get_time();
 
             match entry_map.get(&id) {
@@ -337,7 +342,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         tid, id, entry.host, entry.port
                     );
 
-                    entry.sender.send(EntryMessage::ShutdownWrite).await;
+                    entry.sender.send(EntryMessage::Eof).await;
                 }
 
                 None => {
@@ -408,12 +413,12 @@ enum Message {
     CSEntryClose(u32),
     CSConnectIp(u32, Vec<u8>),
     CSConnectDomainName(u32, Vec<u8>, u16),
-    CSShutdownWrite(u32),
+    CSEof(u32),
     CSData(u32, Vec<u8>),
 
     SCHeartbeat,
     SCClosePort(u32),
-    SCShutdownWrite(u32),
+    SCEof(u32),
     SCConnectOk(u32, Vec<u8>),
     SCData(u32, Vec<u8>),
 
@@ -424,7 +429,7 @@ enum Message {
 pub enum EntryMessage {
     ConnectOk(Vec<u8>),
     Data(Vec<u8>),
-    ShutdownWrite,
+    Eof,
     Close,
 }
 
