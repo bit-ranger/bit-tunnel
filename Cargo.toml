@@ -1,13 +1,2 @@
-[package]
-name = "bit-tunnel"
-version = "0.1.0"
-authors = ["bit-ranger <sincerebravefight@gmail.com>"]
-edition = "2018"
-description = "bit tunnel"
-repository = "https://github.com/bit-ranger/bit-tunnel"
-license = "MIT"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-async-std = { version = "1.2.0", features = ["unstable"] }
+[workspace]
+members = ['client']
