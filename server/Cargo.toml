@@ -1,5 +1,5 @@
 [package]
-name = "common"
+name = "server"
 version = "0.1.0"
 authors = ["bit-ranger <sincerebravefight@gmail.com>"]
 edition = "2018"
@@ -7,7 +7,6 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+common = {path="../common"}
 async-std = { version = "1.2.0", features = ["unstable"] }
-futures-timer = "1.0.2"
-log = { version = "0.4.8", features = ["std"] }
 time = "0.1.42"

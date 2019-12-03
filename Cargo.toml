@@ -1,2 +1,2 @@
 [workspace]
-members = ['client', 'common']
+members = ['common', 'client', 'server']

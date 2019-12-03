@@ -90,7 +90,7 @@ pub fn pack_cs_heartbeat() -> [u8; 1] {
     buf
 }
 
-pub fn pack_sc_close_port_msg(id: u32) -> [u8; 5] {
+pub fn pack_sc_entry_close(id: u32) -> [u8; 5] {
     pack_cmd_id(sc::ENTRY_CLOSE, id)
 }
 
@@ -106,7 +106,7 @@ pub fn pack_sc_data_msg(id: u32, data: &[u8]) -> Vec<u8> {
     pack_cmd_id_data(sc::DATA, id, data)
 }
 
-pub fn pack_sc_heartbeat_rsp_msg() -> [u8; 1] {
+pub fn pack_sc_heartbeat() -> [u8; 1] {
     let buf = [sc::HEARTBEAT];
     buf
 }

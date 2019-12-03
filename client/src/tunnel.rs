@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_std::io::{Read, Write};
 use async_std::prelude::*;
 use std::collections::HashMap;
-use super::timer;
+use common::timer;
 use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
 //use common::protocol::{ALIVE_TIMEOUT_TIME_MS};
 use log::{info};

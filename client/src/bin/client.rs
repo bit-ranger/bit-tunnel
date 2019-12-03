@@ -8,7 +8,8 @@ use std::net::Shutdown;
 use std::net::ToSocketAddrs;
 use std::str::from_utf8;
 use std::vec::Vec;
-use client::{socks5, logger};
+use client::{socks5};
+use common::logger;
 use log::{info};
 
 
