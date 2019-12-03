@@ -24,7 +24,7 @@ impl Tunnel {
         let entry_id = self.entry_id_current;
         self.entry_id_current += 1;
         let (entry_sender, entry_receiver) = channel(999);
-        self.sender.send(Message::CSEntryOpen(entry_id, entry_sender)).await;
+        self.sender.send(Message::CS(Cs::EntryOpen(entry_id, entry_sender))).await;
 
         (
             Entry {
@@ -46,25 +46,25 @@ pub struct Entry {
 impl Entry {
 
     pub async fn write(&self, buf: Vec<u8>) {
-        self.tunnel_sender.send(Message::CSData(self.id, buf)).await;
+        self.tunnel_sender.send(Message::CS(Cs::Data(self.id, buf))).await;
     }
 
     pub async fn connect_address(&self, address: Vec<u8>) {
-        self.tunnel_sender.send(Message::CSConnectIp(self.id, address)).await;
+        self.tunnel_sender.send(Message::CS(Cs::ConnectIp(self.id, address))).await;
     }
 
     pub async fn connect_domain_name(&self, domain_name: Vec<u8>, port: u16) {
         self.tunnel_sender
-            .send(Message::CSConnectDomainName(self.id, domain_name, port))
+            .send(Message::CS(Cs::ConnectDomainName(self.id, domain_name, port)))
             .await;
     }
 
     pub async fn eof(&self) {
-        self.tunnel_sender.send(Message::CSEof(self.id)).await;
+        self.tunnel_sender.send(Message::CS(Cs::Eof(self.id))).await;
     }
 
     pub async fn close(&self) {
-        self.tunnel_sender.send(Message::CSEntryClose(self.id)).await;
+        self.tunnel_sender.send(Message::CS(Cs::EntryClose(self.id))).await;
     }
 
     pub async fn read(&self) -> EntryMessage {
@@ -147,7 +147,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
         let op = op[0];
 
         if op == sc::HEARTBEAT {
-            tunnel_sender.send(Message::SCHeartbeat).await;
+            tunnel_sender.send(Message::SC(Sc::Heartbeat)).await;
             continue;
         }
 
@@ -157,11 +157,11 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
 
         match op {
             sc::ENTRY_CLOSE => {
-                tunnel_sender.send(Message::SCEntryClose(id)).await;
+                tunnel_sender.send(Message::SC(Sc::EntryClose(id))).await;
             }
 
             sc::EOF => {
-                tunnel_sender.send(Message::SCEof(id)).await;
+                tunnel_sender.send(Message::SC(Sc::Eof(id))).await;
             }
 
             sc::CONNECT_OK | sc::DATA => {
@@ -175,9 +175,9 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
                 let data = buf;
 
                 if op == sc::CONNECT_OK {
-                    tunnel_sender.send(Message::SCConnectOk(id, data)).await;
+                    tunnel_sender.send(Message::SC(Sc::ConnectOk(id, data))).await;
                 } else {
-                    tunnel_sender.send(Message::SCData(id, data)).await;
+                    tunnel_sender.send(Message::SC(Sc::Data(id, data))).await;
                 }
             }
 
@@ -198,25 +198,13 @@ async fn tunnel_to_server_stream<W: Write + Unpin>(
     let mut alive_time = get_time();
 
     let duration = Duration::from_millis(HEARTBEAT_INTERVAL_MS as u64);
-    let timer_stream = timer::interval(duration, Message::CSHeartbeat);
+    let timer_stream = timer::interval(duration, Message::CS(Cs::Heartbeat));
     let mut msg_stream = timer_stream.merge(tunnel_receiver);
 
     server_stream.write_all(&VERIFY_DATA).await?;
 
     loop {
         match msg_stream.next().await {
-            Some(Message::CSHeartbeat) => {
-                //空闲时间超过ALIVE_TIMEOUT_TIME_MS, 结束tunnel_to_server_stream
-                //tunnel结束后, 缺少机制增加tunnel
-                //@see client/src/bin/client.rs:112
-                //所以此处不结束tunnel
-//                let duration = get_time() - alive_time;
-//
-//                if duration.num_milliseconds() > ALIVE_TIMEOUT_TIME_MS {
-//                    break;
-//                }
-                server_stream.write_all(&pack_cs_heartbeat()).await?;
-            }
 
             Some(msg) => {
                 process_tunnel_message(tunnel_id, msg, &mut alive_time, entry_map, server_stream)
@@ -238,140 +226,154 @@ async fn process_tunnel_message<W: Write + Unpin>(
     server_stream: &mut W,
 ) -> std::io::Result<()> {
     match msg {
-        Message::CSEntryOpen(id, entry_sender) => {
-            entry_map.insert(
-                id,
-                EntryInternal {
-                    sender: entry_sender,
-                    host: String::new(),
-                    port: 0,
-                },
-            );
 
-            server_stream.write_all(&pack_cs_entry_open(id)).await?;
-        }
+        Message::CS(cs) => {
+            match cs{
 
-        Message::CSConnectIp(id, buf) => {
-            let data = buf;
-            server_stream.write_all(&pack_cs_connect(id, &data)).await?;
-        }
-
-        Message::CSConnectDomainName(id, buf, port) => {
-            let host = String::from_utf8(buf.clone()).unwrap_or(String::new());
-            info!("{}.{}: connecting {}:{}", tid, id, host, port);
-
-            if let Some(value) = entry_map.get_mut(&id) {
-                value.host = host;
-                value.port = port;
-            }
-
-            let packed_buffer = pack_cs_connect_domain_name(id, &buf, port);
-            server_stream.write_all(&packed_buffer).await?;
-        }
-
-        Message::CSEof(id) => {
-            match entry_map.get(&id) {
-                Some(entry) => {
-                    info!(
-                        "{}.{}: client shutdown write {}:{}",
-                        tid, id, entry.host, entry.port
-                    );
+                Cs::Heartbeat => {
+                    server_stream.write_all(&pack_cs_heartbeat()).await?;
                 }
 
-                None => {
-                    info!("{}.{}: client shutdown write unknown server", tid, id);
-                }
-            }
-
-            server_stream.write_all(&pack_cs_eof(id)).await?;
-        }
-
-        Message::CSData(id, buf) => {
-            server_stream.write_all(&pack_cs_data(id, &buf)).await?;
-        }
-
-        Message::CSEntryClose(id) => {
-            match entry_map.get(&id) {
-                Some(value) => {
-                    info!("{}.{}: client close {}:{}", tid, id, value.host, value.port);
-                    value.sender.send(EntryMessage::Close).await;
-                    server_stream.write_all(&pack_cs_entry_close(id)).await?;
-                }
-
-                None => {
-                    info!("{}.{}: client close unknown server", tid, id);
-                }
-            }
-
-            entry_map.remove(&id);
-        }
-
-        Message::SCHeartbeat => {
-            *alive_time = get_time();
-        }
-
-        Message::SCEntryClose(id) => {
-            *alive_time = get_time();
-
-            match entry_map.get(&id) {
-                Some(value) => {
-                    info!("{}.{}: server close {}:{}", tid, id, value.host, value.port);
-
-                    value.sender.send(EntryMessage::Close).await;
-                }
-
-                None => {
-                    info!("{}.{}: server close unknown client", tid, id);
-                }
-            }
-
-            entry_map.remove(&id);
-        }
-
-        Message::SCEof(id) => {
-            *alive_time = get_time();
-
-            match entry_map.get(&id) {
-                Some(entry) => {
-                    info!(
-                        "{}.{}: server shutdown write {}:{}",
-                        tid, id, entry.host, entry.port
+                Cs::EntryOpen(id, entry_sender) => {
+                    entry_map.insert(
+                        id,
+                        EntryInternal {
+                            sender: entry_sender,
+                            host: String::new(),
+                            port: 0,
+                        },
                     );
 
-                    entry.sender.send(EntryMessage::Eof).await;
+                    server_stream.write_all(&pack_cs_entry_open(id)).await?;
                 }
 
-                None => {
-                    info!("{}.{}: server shutdown write unknown client", tid, id);
+                Cs::ConnectIp(id, buf) => {
+                    let data = buf;
+                    server_stream.write_all(&pack_cs_connect(id, &data)).await?;
                 }
+
+                Cs::ConnectDomainName(id, buf, port) => {
+                    let host = String::from_utf8(buf.clone()).unwrap_or(String::new());
+                    info!("{}.{}: connecting {}:{}", tid, id, host, port);
+
+                    if let Some(value) = entry_map.get_mut(&id) {
+                        value.host = host;
+                        value.port = port;
+                    }
+
+                    let packed_buffer = pack_cs_connect_domain_name(id, &buf, port);
+                    server_stream.write_all(&packed_buffer).await?;
+                }
+
+                Cs::Eof(id) => {
+                    match entry_map.get(&id) {
+                        Some(entry) => {
+                            info!(
+                                "{}.{}: client shutdown write {}:{}",
+                                tid, id, entry.host, entry.port
+                            );
+                        }
+
+                        None => {
+                            info!("{}.{}: client shutdown write unknown server", tid, id);
+                        }
+                    }
+
+                    server_stream.write_all(&pack_cs_eof(id)).await?;
+                }
+
+                Cs::Data(id, buf) => {
+                    server_stream.write_all(&pack_cs_data(id, &buf)).await?;
+                }
+
+                Cs::EntryClose(id) => {
+                    match entry_map.get(&id) {
+                        Some(value) => {
+                            info!("{}.{}: client close {}:{}", tid, id, value.host, value.port);
+                            value.sender.send(EntryMessage::Close).await;
+                            server_stream.write_all(&pack_cs_entry_close(id)).await?;
+                        }
+
+                        None => {
+                            info!("{}.{}: client close unknown server", tid, id);
+                        }
+                    }
+
+                    entry_map.remove(&id);
+                }
+
+
             }
         }
 
-        Message::SCConnectOk(id, buf) => {
-            *alive_time = get_time();
-
-            match entry_map.get(&id) {
-                Some(value) => {
-                    info!("{}.{}: connect {}:{} ok", tid, id, value.host, value.port);
-
-                    value.sender.send(EntryMessage::ConnectOk(buf)).await;
+        Message::SC(sc) => {
+            match sc {
+                Sc::Heartbeat => {
+                    *alive_time = get_time();
                 }
 
-                None => {
-                    info!("{}.{}: connect unknown server ok", tid, id);
+                Sc::EntryClose(id) => {
+                    *alive_time = get_time();
+
+                    match entry_map.get(&id) {
+                        Some(entry) => {
+                            info!("{}.{}: server close {}:{}", tid, id, entry.host, entry.port);
+
+                            entry.sender.send(EntryMessage::Close).await;
+                        }
+
+                        None => {
+                            info!("{}.{}: server close unknown client", tid, id);
+                        }
+                    }
+
+                    entry_map.remove(&id);
+                }
+
+                Sc::Eof(id) => {
+                    *alive_time = get_time();
+
+                    match entry_map.get(&id) {
+                        Some(entry) => {
+                            info!(
+                                "{}.{}: server shutdown write {}:{}",
+                                tid, id, entry.host, entry.port
+                            );
+
+                            entry.sender.send(EntryMessage::Eof).await;
+                        }
+
+                        None => {
+                            info!("{}.{}: server shutdown write unknown client", tid, id);
+                        }
+                    }
+                }
+
+                Sc::ConnectOk(id, buf) => {
+                    *alive_time = get_time();
+
+                    match entry_map.get(&id) {
+                        Some(value) => {
+                            info!("{}.{}: connect {}:{} ok", tid, id, value.host, value.port);
+
+                            value.sender.send(EntryMessage::ConnectOk(buf)).await;
+                        }
+
+                        None => {
+                            info!("{}.{}: connect unknown server ok", tid, id);
+                        }
+                    }
+                }
+
+                //向channel写数据
+                Sc::Data(id, buf) => {
+                    *alive_time = get_time();
+                    if let Some(value) = entry_map.get(&id) {
+                        value.sender.send(EntryMessage::Data(buf)).await;
+                    };
                 }
             }
         }
-
-        //向channel写数据
-        Message::SCData(id, buf) => {
-            *alive_time = get_time();
-            if let Some(value) = entry_map.get(&id) {
-                value.sender.send(EntryMessage::Data(buf)).await;
-            };
-        }
-
-        _ => {}
     }
 
     Ok(())
@@ -389,26 +391,34 @@ struct EntryInternal {
 
 #[derive(Clone)]
 enum Message {
-    CSEntryOpen(u32, Sender<EntryMessage>),
-    CSEntryClose(u32),
-    CSConnectIp(u32, Vec<u8>),
-    CSConnectDomainName(u32, Vec<u8>, u16),
-    CSEof(u32),
-    CSData(u32, Vec<u8>),
-    CSHeartbeat,
-
-    SCHeartbeat,
-    SCEntryClose(u32),
-    SCEof(u32),
-    SCConnectOk(u32, Vec<u8>),
-    SCData(u32, Vec<u8>),
+    CS(Cs),
+    SC(Sc)
 }
 
-pub enum EntryMessage {
+#[derive(Clone)]
+enum Cs {
+    EntryOpen(u32, Sender<EntryMessage>),
+    EntryClose(u32),
+    ConnectIp(u32, Vec<u8>),
+    ConnectDomainName(u32, Vec<u8>, u16),
+    Eof(u32),
+    Data(u32, Vec<u8>),
+    Heartbeat,
+}
+
+#[derive(Clone)]
+enum Sc{
+    EntryClose(u32),
+    Eof(u32),
+    ConnectOk(u32, Vec<u8>),
+    Data(u32, Vec<u8>),
+    Heartbeat,
+}
+
+pub enum EntryMessage{
     ConnectOk(Vec<u8>),
     Data(Vec<u8>),
     Eof,
     Close,
 }
-
 
