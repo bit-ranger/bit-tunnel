@@ -10,3 +10,5 @@ edition = "2018"
 common = {path="../common"}
 async-std = { version = "1.2.0", features = ["unstable"] }
 time = "0.1.42"
+getopts = "0.2.21"
+log = { version = "0.4.8", features = ["std"] }

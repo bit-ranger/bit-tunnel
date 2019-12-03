@@ -94,15 +94,15 @@ pub fn pack_sc_entry_close(id: u32) -> [u8; 5] {
     pack_cmd_id(sc::ENTRY_CLOSE, id)
 }
 
-pub fn pack_sc_shutdown_write_msg(id: u32) -> [u8; 5] {
+pub fn pack_sc_eof(id: u32) -> [u8; 5] {
     pack_cmd_id(sc::EOF, id)
 }
 
-pub fn pack_sc_connect_ok_msg(id: u32, data: &[u8]) -> Vec<u8> {
+pub fn pack_sc_connect_ok(id: u32, data: &[u8]) -> Vec<u8> {
     pack_cmd_id_data(sc::CONNECT_OK, id, data)
 }
 
-pub fn pack_sc_data_msg(id: u32, data: &[u8]) -> Vec<u8> {
+pub fn pack_sc_data(id: u32, data: &[u8]) -> Vec<u8> {
     pack_cmd_id_data(sc::DATA, id, data)
 }
 

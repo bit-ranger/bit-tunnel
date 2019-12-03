@@ -6,6 +6,7 @@ use async_std::task;
 
 use server::tunnel::*;
 use common::logger;
+use log::{info};
 
 fn main() {
     let args: Vec<_> = env::args().collect();

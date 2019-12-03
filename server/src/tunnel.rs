@@ -11,8 +11,9 @@ use async_std::sync::{channel, Receiver, Sender};
 use async_std::task;
 
 use time::{get_time, Timespec};
-use common::protocol::{cs, VERIFY_DATA, ALIVE_TIMEOUT_TIME_MS, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat, pack_sc_entry_close, pack_sc_shutdown_write_msg, pack_sc_connect_ok_msg, pack_sc_data_msg};
+use common::protocol::{cs, VERIFY_DATA, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat, pack_sc_entry_close, pack_sc_eof, pack_sc_connect_ok, pack_sc_data};
 use common::timer;
+
 
 
 
@@ -44,7 +45,7 @@ impl TcpTunnel {
         let _ = r.join(w).await;
 
         for (_, value) in entry_map.iter() {
-            value.sender.send(TunnelPortMsg::ClosePort).await;
+            value.sender.send(EntryMessage::Close).await;
         }
     }
 }
@@ -100,7 +101,7 @@ async fn dest_stream_to_entry(dest_stream: &mut &TcpStream, entry: &Entry) {
         match dest_stream.read(&mut buf).await {
             Ok(0) => {
                 let _ = dest_stream.shutdown(Shutdown::Read);
-                entry.shutdown_write().await;
+                entry.eof().await;
                 break;
             }
 
@@ -169,7 +170,7 @@ async fn entry_task(entry: Entry) {
         }
 
         Err(_) => {
-            return write_port.close().await;
+            return entry.close().await;
         }
     }
 
@@ -178,7 +179,7 @@ async fn entry_task(entry: Entry) {
     let r = entry_to_dest_stream(&entry, dest_stream1);
     let _ = r.join(w).await;
 
-    entry.close();
+    entry.close().await;
 }
 
 
@@ -201,7 +202,7 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
         let op = op[0];
 
         if op == cs::HEARTBEAT {
-            tunnel_sender.send(TunnelMsg::CSHeartbeat).await;
+            tunnel_sender.send(Message::CS(Cs::Heartbeat)).await;
             continue;
         }
 
@@ -279,13 +280,7 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
 
     loop {
         match msg_stream.next().await {
-//            Some(TunnelMsg::Heartbeat) => {
-//                let duration = get_time() - alive_time;
-//                if duration.num_milliseconds() > ALIVE_TIMEOUT_TIME_MS {
-//                    break;
-//                }
-//            }
-//
+
             Some(Message::SC(Sc::CloseTunnel)) => break,
 
             Some(msg) => {
@@ -329,7 +324,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
 
                     let entry = Entry{
                         id,
-                        tunnel_sender,
+                        tunnel_sender: tunnel_sender.clone(),
                         entry_receiver: er
                     };
 
@@ -392,29 +387,26 @@ async fn process_tunnel_message<W: Write + Unpin>(
         Message::SC(sc) => {
 
             match sc {
-                Message::SC(Sc::EntryClose(id)) => {
+                Sc::EntryClose(id) => {
                     if let Some(value) = entry_map.get(&id) {
-                        value.sender.send(TunnelPortMsg::ClosePort).await;
+                        value.sender.send(EntryMessage::Close).await;
                         client_stream.write_all(&pack_sc_entry_close(id)).await?;
                     };
 
                     entry_map.remove(&id);
                 }
 
-                Message::SC(Sc::Eof(id)) => {
-                    client_stream.write_all(&pack_sc_shutdown_write_msg(id)).await?;
+                Sc::Eof(id) => {
+                    client_stream.write_all(&pack_sc_eof(id)).await?;
                 }
 
-                Message::SC(Sc::ConnectOk(id, buf)) => {
-                    let data = encryptor.encrypt(&buf);
-                    client_stream.write_all(&pack_sc_connect_ok_msg(id, &data)).await?;
+                Sc::ConnectOk(id, buf) => {
+                    client_stream.write_all(&pack_sc_connect_ok(id, &buf)).await?;
                 }
 
-                Message::SC(Sc::Data(id, buf)) => {
-                    let data = encryptor.encrypt(&buf);
-                    client_stream.write_all(&pack_sc_data_msg(id, &data)).await?;
+                Sc::Data(id, buf) => {
+                    client_stream.write_all(&pack_sc_data(id, &buf)).await?;
                 }
-
 
                 _ => {}
             }
