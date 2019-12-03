@@ -25,7 +25,7 @@ fn main() {
     };
 
     let listen_addr = matches.opt_str("l").unwrap();
-    let log_path = matches.opt_str("log").unwrap_or(String::new());
+    let log_path = matches.opt_str("log").unwrap_or(String::from("/var/log/bit-tunnel/server.log"));
 
     logger::init(log::Level::Info, log_path, 1, 2000000).unwrap();
     info!("starting up");

@@ -166,7 +166,7 @@ fn main() {
 
     let server_addr = matches.opt_str("s").unwrap();
     let tunnel_count = matches.opt_str("c").unwrap();
-    let log_path = matches.opt_str("log").unwrap_or(String::new());
+    let log_path = matches.opt_str("log").unwrap_or(String::from("/var/log/bit-tunnel/client.log"));
     let listen_addr = matches.opt_str("l").unwrap_or("127.0.0.1:1080".to_string());
 
     let count: u32 = match tunnel_count.parse() {
