@@ -44,9 +44,6 @@ pub struct Entry {
 }
 
 impl Entry {
-    pub async fn drop(&self) {
-        self.tunnel_sender.send(Message::EntryClose(self.id)).await;
-    }
 
     pub async fn write(&self, buf: Vec<u8>) {
         self.tunnel_sender.send(Message::CSData(self.id, buf)).await;
@@ -160,7 +157,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
 
         match op {
             sc::ENTRY_CLOSE => {
-                tunnel_sender.send(Message::SCClosePort(id)).await;
+                tunnel_sender.send(Message::SCEntryClose(id)).await;
             }
 
             sc::EOF => {
@@ -201,14 +198,14 @@ async fn tunnel_to_server_stream<W: Write + Unpin>(
     let mut alive_time = get_time();
 
     let duration = Duration::from_millis(HEARTBEAT_INTERVAL_MS as u64);
-    let timer_stream = timer::interval(duration, Message::Heartbeat);
+    let timer_stream = timer::interval(duration, Message::CSHeartbeat);
     let mut msg_stream = timer_stream.merge(tunnel_receiver);
 
     server_stream.write_all(&VERIFY_DATA).await?;
 
     loop {
         match msg_stream.next().await {
-            Some(Message::Heartbeat) => {
+            Some(Message::CSHeartbeat) => {
                 //空闲时间超过ALIVE_TIMEOUT_TIME_MS, 结束tunnel_to_server_stream
                 //tunnel结束后, 缺少机制增加tunnel
                 //@see client/src/bin/client.rs:112
@@ -245,7 +242,6 @@ async fn process_tunnel_message<W: Write + Unpin>(
             entry_map.insert(
                 id,
                 EntryInternal {
-                    count: 2,
                     sender: entry_sender,
                     host: String::new(),
                     port: 0,
@@ -314,7 +310,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
             *alive_time = get_time();
         }
 
-        Message::SCClosePort(id) => {
+        Message::SCEntryClose(id) => {
             *alive_time = get_time();
 
             match entry_map.get(&id) {
@@ -375,21 +371,6 @@ async fn process_tunnel_message<W: Write + Unpin>(
             };
         }
 
-        Message::EntryClose(id) => {
-            if let Some(value) = entry_map.get_mut(&id) {
-                value.count = value.count - 1;
-                if value.count == 0 {
-                    info!(
-                        "{}.{}: drop tunnel port {}:{}",
-                        tid, id, value.host, value.port
-                    );
-                    entry_map.remove(&id);
-                }
-            } else {
-                info!("{}.{}: drop unknown tunnel port", tid, id);
-            }
-        }
-
         _ => {}
     }
 
@@ -402,7 +383,6 @@ type EntryMap = HashMap<u32, EntryInternal>;
 struct EntryInternal {
     host: String,
     port: u16,
-    count: u32,
     sender: Sender<EntryMessage>,
 }
 
@@ -415,15 +395,13 @@ enum Message {
     CSConnectDomainName(u32, Vec<u8>, u16),
     CSEof(u32),
     CSData(u32, Vec<u8>),
+    CSHeartbeat,
 
     SCHeartbeat,
-    SCClosePort(u32),
+    SCEntryClose(u32),
     SCEof(u32),
     SCConnectOk(u32, Vec<u8>),
     SCData(u32, Vec<u8>),
-
-    Heartbeat,
-    EntryClose(u32),
 }
 
 pub enum EntryMessage {

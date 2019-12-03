@@ -106,7 +106,7 @@ async fn run_entry(
         let _ = stream.shutdown(Shutdown::Both);
     }
 
-    entry.drop().await;
+    entry.close().await;
 }
 
 fn run_tunnels(
