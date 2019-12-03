@@ -8,18 +8,18 @@ pub mod cs {
     pub const ENTRY_OPEN: u8 = 1;
     pub const ENTRY_CLOSE: u8 = 2;
     pub const EOF: u8 = 4;
-    pub const CONNECT: u8 = 5;
+    pub const CONNECT_IP: u8 = 5;
     pub const CONNECT_DOMAIN_NAME: u8 = 6;
     pub const DATA: u8 = 7;
     pub const HEARTBEAT: u8 = 8;
 }
 
 pub mod sc {
-    pub const CLOSE_PORT: u8 = 1;
+    pub const ENTRY_CLOSE: u8 = 1;
     pub const EOF: u8 = 3;
     pub const CONNECT_OK: u8 = 4;
     pub const DATA: u8 = 5;
-    pub const HEARTBEAT_RSP: u8 = 6;
+    pub const HEARTBEAT: u8 = 6;
 }
 
 fn fill_cmd_id_len(buf: &mut [u8], cmd: u8, id: u32, len: u32) {
@@ -54,7 +54,7 @@ pub fn pack_cs_entry_open(id: u32) -> [u8; 5] {
 }
 
 pub fn pack_cs_connect(id: u32, data: &[u8]) -> Vec<u8> {
-    pack_cmd_id_data(cs::CONNECT, id, data)
+    pack_cmd_id_data(cs::CONNECT_IP, id, data)
 }
 
 pub fn pack_cs_connect_domain_name(id: u32, domain: &[u8], port: u16) -> Vec<u8> {
@@ -91,7 +91,7 @@ pub fn pack_cs_heartbeat() -> [u8; 1] {
 }
 
 pub fn pack_sc_close_port_msg(id: u32) -> [u8; 5] {
-    pack_cmd_id(sc::CLOSE_PORT, id)
+    pack_cmd_id(sc::ENTRY_CLOSE, id)
 }
 
 pub fn pack_sc_shutdown_write_msg(id: u32) -> [u8; 5] {
@@ -107,6 +107,6 @@ pub fn pack_sc_data_msg(id: u32, data: &[u8]) -> Vec<u8> {
 }
 
 pub fn pack_sc_heartbeat_rsp_msg() -> [u8; 1] {
-    let buf = [sc::HEARTBEAT_RSP];
+    let buf = [sc::HEARTBEAT];
     buf
 }

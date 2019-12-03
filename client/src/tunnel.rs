@@ -149,7 +149,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
         server_stream.read_exact(&mut op).await?;
         let op = op[0];
 
-        if op == sc::HEARTBEAT_RSP {
+        if op == sc::HEARTBEAT {
             tunnel_sender.send(Message::SCHeartbeat).await;
             continue;
         }
@@ -159,7 +159,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
         let id = u32::from_be(unsafe { *(id.as_ptr() as *const u32) });
 
         match op {
-            sc::CLOSE_PORT => {
+            sc::ENTRY_CLOSE => {
                 tunnel_sender.send(Message::SCClosePort(id)).await;
             }
 
