@@ -151,11 +151,9 @@ fn main() {
 
     let mut opts = getopts::Options::new();
     opts.reqopt("s", "server", "server address", "server-address");
-    opts.reqopt("k", "key", "secret key", "key");
     opts.reqopt("c", "tunnel-count", "tunnel count", "tunnel-count");
     opts.optopt("l", "listen", "listen address", "listen-address");
     opts.optopt("", "log", "log path", "log-path");
-    opts.optflag("", "enable-ucp", "enable ucp");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
