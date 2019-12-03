@@ -13,6 +13,7 @@ use async_std::task;
 use time::{get_time, Timespec};
 use common::protocol::{cs, VERIFY_DATA, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat, pack_sc_entry_close, pack_sc_eof, pack_sc_connect_ok, pack_sc_data};
 use common::timer;
+use log::{info};
 
 
 
@@ -86,8 +87,6 @@ impl Entry {
     }
 }
 
-
-
 struct EntryInternal {
     sender: Sender<EntryMessage>,
 }
@@ -149,6 +148,7 @@ async fn entry_task(entry: Entry) {
         }
 
         EntryMessage::ConnectDomainName(domain_name, port) => {
+            info!("connect {}", from_utf8(&domain_name).unwrap());
             TcpStream::connect((from_utf8(&domain_name).unwrap(), port))
                 .await
                 .ok()
