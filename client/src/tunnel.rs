@@ -108,6 +108,7 @@ impl TcpTunnel {
         tunnel_sender: Sender<Message>,
         tunnel_receiver: Receiver<Message>,
     ) {
+        info!("{}: tunnel connecting", tunnel_id);
         let server_stream = match TcpStream::connect(config.get_server_address()).await {
             Ok(server_stream) => server_stream,
 
@@ -116,6 +117,7 @@ impl TcpTunnel {
                 return;
             }
         };
+        info!("{}: tunnel connect ok", tunnel_id);
 
         let mut entry_map = EntryMap::new();
         let (server_stream0, server_stream1) = &mut (&server_stream, &server_stream);
@@ -129,7 +131,7 @@ impl TcpTunnel {
         };
         let _ = r.join(w).await;
 
-        info!("Tcp tunnel {} broken", tunnel_id);
+        info!("{}: tunnel broken", tunnel_id);
 
         for (_, value) in entry_map.iter() {
             value.sender.send(EntryMessage::Close).await;
