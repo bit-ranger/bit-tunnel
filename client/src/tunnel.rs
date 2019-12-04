@@ -145,6 +145,19 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
     tunnel_sender: Sender<Message>,
 ) -> std::io::Result<()> {
 
+    let mut ctr = vec![0; Cryptor::ctr_size()];
+    stream.read_exact(&mut ctr).await?;
+
+    let mut cryptor = Cryptor::with_ctr(&key, ctr);
+
+    let mut buf = vec![0; VERIFY_DATA.len()];
+    stream.read_exact(&mut buf).await?;
+
+    let data = decryptor.decrypt(&buf);
+    if &data != &VERIFY_DATA {
+        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
+    }
+
     loop {
         let mut op = [0u8; 1];
         server_stream.read_exact(&mut op).await?;
@@ -176,7 +189,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
                 let mut buf = vec![0; len as usize];
                 server_stream.read_exact(&mut buf).await?;
 
-                let data = buf;
+                let data = cryptor.decrypt(&buf);
 
                 if op == sc::CONNECT_OK {
                     tunnel_sender.send(Message::SC(Sc::ConnectOk(id, data))).await;
@@ -292,7 +305,8 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 }
 
                 Cs::Data(id, buf) => {
-                    server_stream.write_all(&pack_cs_data(id, &buf)).await?;
+                    let data = cryptor.encrypt(&buf);
+                    server_stream.write_all(&pack_cs_data(id, &data)).await?;
                 }
 
                 Cs::EntryClose(id) => {
