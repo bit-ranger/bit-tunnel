@@ -11,6 +11,7 @@ use std::vec::Vec;
 use client::{socks5};
 use common::logger;
 use log::{info};
+use client::config::Config;
 
 
 async fn local_stream_to_entry(local_stream: &mut &TcpStream, entry: &Entry) {
@@ -111,19 +112,17 @@ async fn run_entry(
 }
 
 fn run_tunnels(
-    listen_address: String,
-    server_address: String,
-    tunnel_number: u32,
+    config: &Config
 ) {
     task::block_on(async move {
         let mut tunnels = Vec::new();
-        for ti in 0..tunnel_number {
-            let tunnel = TcpTunnel::new(ti, server_address.clone());
+        for ti in 0..config.get_tunnel_max() {
+            let tunnel = TcpTunnel::new(config, ti);
             tunnels.push(tunnel);
         }
 
         let mut index = 0;
-        let listener = TcpListener::bind(listen_address.as_str()).await.unwrap();
+        let listener = TcpListener::bind(config.get_listen_address()).await.unwrap();
         let mut incoming = listener.incoming();
 
         while let Some(stream) = incoming.next().await {
@@ -152,9 +151,10 @@ fn main() {
 
     let mut opts = getopts::Options::new();
     opts.reqopt("s", "server", "server address", "server-address");
-    opts.reqopt("c", "tunnel-count", "tunnel count", "tunnel-count");
+    opts.reqopt("c", "tunnel-max", "tunnel max", "tunnel-max");
     opts.optopt("l", "listen", "listen address", "listen-address");
     opts.optopt("", "log", "log path", "log-path");
+    opts.optopt("k", "key", "key", "key");
 
     let matches = match opts.parse(&args[1..]) {
         Ok(m) => m,
@@ -165,11 +165,12 @@ fn main() {
     };
 
     let server_addr = matches.opt_str("s").unwrap();
-    let tunnel_count = matches.opt_str("c").unwrap();
+    let tunnel_max = matches.opt_str("c").unwrap();
     let log_path = matches.opt_str("log").unwrap_or(String::from("/var/log/bit-tunnel/client.log"));
     let listen_addr = matches.opt_str("l").unwrap_or("127.0.0.1:1080".to_string());
+    let key = matches.opt_str("k").unwrap_or("123456".to_string());
 
-    let count: u32 = match tunnel_count.parse() {
+    let tunnel_max: u32 = match tunnel_max.parse() {
         Err(_) | Ok(0) => {
             println!("tunnel-count must greater than 0");
             return;
@@ -180,5 +181,12 @@ fn main() {
     logger::init(log::Level::Info, log_path, 1, 2000000).unwrap();
     info!("starting up");
 
-    run_tunnels(listen_addr, server_addr, count);
+    let config = Config::new(
+        key.into_bytes(),
+        listen_addr,
+        server_addr,
+        tunnel_max
+    );
+
+    run_tunnels(&config);
 }

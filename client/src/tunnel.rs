@@ -8,9 +8,9 @@ use async_std::prelude::*;
 use std::collections::HashMap;
 use common::timer;
 use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
-//use common::protocol::{ALIVE_TIMEOUT_TIME_MS};
 use log::{info};
 use time::{get_time, Timespec};
+use crate::config::Config;
 
 
 pub struct Tunnel {
@@ -78,15 +78,16 @@ impl Entry {
 pub struct TcpTunnel;
 
 impl TcpTunnel {
-    pub fn new(tunnel_id: u32, server_address: String) -> Tunnel {
+    pub fn new(config: &Config, tunnel_id: u32) -> Tunnel {
         let (s, r) = channel(10000);
         let s1 = s.clone();
-
+        let config = config.clone();
         task::spawn(async move {
+
             loop {
                 TcpTunnel::task(
+                    &config,
                     tunnel_id,
-                    server_address.clone(),
                     s.clone(),
                     r.clone(),
                 ).await;
@@ -100,12 +101,12 @@ impl TcpTunnel {
     }
 
     async fn task(
+        config: &Config,
         tunnel_id: u32,
-        server_address: String,
         tunnel_sender: Sender<Message>,
         tunnel_receiver: Receiver<Message>,
     ) {
-        let server_stream = match TcpStream::connect(&server_address).await {
+        let server_stream = match TcpStream::connect(config.get_server_address()).await {
             Ok(server_stream) => server_stream,
 
             Err(_) => {
@@ -117,11 +118,11 @@ impl TcpTunnel {
         let mut entry_map = EntryMap::new();
         let (server_stream0, server_stream1) = &mut (&server_stream, &server_stream);
         let r = async {
-            let _ = server_stream_to_tunnel(server_stream0, tunnel_sender.clone()).await;
+            let _ = server_stream_to_tunnel(config, server_stream0, tunnel_sender.clone()).await;
             let _ = server_stream.shutdown(Shutdown::Both);
         };
         let w = async {
-            let _ = tunnel_to_server_stream(tunnel_id, tunnel_receiver.clone(), &mut entry_map, server_stream1).await;
+            let _ = tunnel_to_server_stream(config, tunnel_id, tunnel_receiver.clone(), &mut entry_map, server_stream1).await;
             let _ = server_stream.shutdown(Shutdown::Both);
         };
         let _ = r.join(w).await;
@@ -137,6 +138,7 @@ impl TcpTunnel {
 
 ///从server_stream读数据, 向tunnel写数据
 async fn server_stream_to_tunnel<R: Read + Unpin>(
+    config: &Config,
     server_stream: &mut R,
     tunnel_sender: Sender<Message>,
 ) -> std::io::Result<()> {
@@ -190,13 +192,14 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
 
 ///从channel读数据, 向tunnel写数据
 async fn tunnel_to_server_stream<W: Write + Unpin>(
+    config: &Config,
     tunnel_id: u32,
     tunnel_receiver: Receiver<Message>,
     entry_map: &mut EntryMap,
-    server_stream: &mut W,
+    server_stream: &mut W
 ) -> std::io::Result<()> {
-    let mut alive_time = get_time();
 
+    let mut alive_time = get_time();
     let duration = Duration::from_millis(HEARTBEAT_INTERVAL_MS as u64);
     let timer_stream = timer::interval(duration, Message::CS(Cs::Heartbeat));
     let mut msg_stream = timer_stream.merge(tunnel_receiver);
