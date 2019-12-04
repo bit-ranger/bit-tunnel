@@ -7,10 +7,12 @@ use async_std::io::{Read, Write};
 use async_std::prelude::*;
 use std::collections::HashMap;
 use common::timer;
-use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
+use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect_ip4, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
 use log::{info};
 use time::{get_time, Timespec};
 use crate::config::Config;
+use common::cryptor::Cryptor;
+use std::str::from_utf8;
 
 
 pub struct Tunnel {
@@ -49,8 +51,8 @@ impl Entry {
         self.tunnel_sender.send(Message::CS(Cs::Data(self.id, buf))).await;
     }
 
-    pub async fn connect_address(&self, address: Vec<u8>) {
-        self.tunnel_sender.send(Message::CS(Cs::ConnectIp(self.id, address))).await;
+    pub async fn connect_ip4(&self, address: Vec<u8>) {
+        self.tunnel_sender.send(Message::CS(Cs::ConnectIp4(self.id, address))).await;
     }
 
     pub async fn connect_domain_name(&self, domain_name: Vec<u8>, port: u16) {
@@ -204,20 +206,20 @@ async fn tunnel_to_server_stream<W: Write + Unpin>(
     let timer_stream = timer::interval(duration, Message::CS(Cs::Heartbeat));
     let mut msg_stream = timer_stream.merge(tunnel_receiver);
 
-    server_stream.write_all(&VERIFY_DATA).await?;
+    let mut cryptor = Cryptor::new(config.get_key());
+
+    server_stream.write_all(cryptor.ctr_as_slice()).await?;
+    server_stream.write_all(cryptor.encrypt(&VERIFY_DATA).as_slice()).await?;
 
     loop {
         match msg_stream.next().await {
-
             Some(msg) => {
-                process_tunnel_message(tunnel_id, msg, &mut alive_time, entry_map, server_stream)
+                process_tunnel_message(tunnel_id, msg, &mut alive_time, entry_map, server_stream, &mut cryptor)
                     .await?;
             }
-
             None => break,
         }
     }
-
     Ok(())
 }
 
@@ -227,6 +229,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
     alive_time: &mut Timespec,
     entry_map: &mut EntryMap,
     server_stream: &mut W,
+    cryptor: &mut Cryptor
 ) -> std::io::Result<()> {
     match msg {
 
@@ -250,9 +253,12 @@ async fn process_tunnel_message<W: Write + Unpin>(
                     server_stream.write_all(&pack_cs_entry_open(id)).await?;
                 }
 
-                Cs::ConnectIp(id, buf) => {
-                    let data = buf;
-                    server_stream.write_all(&pack_cs_connect(id, &data)).await?;
+                Cs::ConnectIp4(id, buf) => {
+                    let addr = from_utf8(&buf).unwrap();
+                    info!("{}.{}: connecting {}", tid, id, addr);
+
+                    let data = cryptor.encrypt(&buf);
+                    server_stream.write_all(&pack_cs_connect_ip4(id, &data)).await?;
                 }
 
                 Cs::ConnectDomainName(id, buf, port) => {
@@ -263,8 +269,8 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         value.host = host;
                         value.port = port;
                     }
-
-                    let packed_buffer = pack_cs_connect_domain_name(id, &buf, port);
+                    let data = cryptor.encrypt(&buf);
+                    let packed_buffer = pack_cs_connect_domain_name(id, &data, port);
                     server_stream.write_all(&packed_buffer).await?;
                 }
 
@@ -272,13 +278,13 @@ async fn process_tunnel_message<W: Write + Unpin>(
                     match entry_map.get(&id) {
                         Some(entry) => {
                             info!(
-                                "{}.{}: client shutdown write {}:{}",
+                                "{}.{}: client eof {}:{}",
                                 tid, id, entry.host, entry.port
                             );
                         }
 
                         None => {
-                            info!("{}.{}: client shutdown write unknown server", tid, id);
+                            info!("{}.{}: client eof unknown server", tid, id);
                         }
                     }
 
@@ -402,7 +408,7 @@ enum Message {
 enum Cs {
     EntryOpen(u32, Sender<EntryMessage>),
     EntryClose(u32),
-    ConnectIp(u32, Vec<u8>),
+    ConnectIp4(u32, Vec<u8>),
     ConnectDomainName(u32, Vec<u8>, u16),
     Eof(u32),
     Data(u32, Vec<u8>),

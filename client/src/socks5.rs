@@ -5,7 +5,7 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 
 
 pub enum Destination {
-    Address {
+    Ip4 {
         address: SocketAddr
     },
     DomainName {
@@ -31,18 +31,18 @@ const REP_SUCCESS: u8 = 0;
 const REP_FAILURE: u8 = 1;
 
 
-async fn method_reject(stream: &mut TcpStream, method: u8) -> std::io::Result<()> {
+async fn write_method(stream: &mut TcpStream, method: u8) -> std::io::Result<()> {
     let buf = [VER, method];
     stream.write_all(&buf).await
 }
 
 
-pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destination> {
+pub async fn read_dest(stream: &mut TcpStream) -> std::io::Result<Destination> {
     let mut buf = [0u8; 2];
     stream.read_exact(&mut buf).await?;
 
     if buf[0] != VER {
-        method_reject(stream, METHOD_NO_ACCEPT).await?;
+        write_method(stream, METHOD_NO_ACCEPT).await?;
         return Ok(Destination::Unknown);
     }
 
@@ -50,11 +50,11 @@ pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destina
     stream.read_exact(&mut methods).await?;
 
     if !methods.into_iter().any(|method| method == METHOD_NO_AUTH) {
-        method_reject(stream, METHOD_NO_ACCEPT).await?;
+        write_method(stream, METHOD_NO_ACCEPT).await?;
         return Ok(Destination::Unknown);
     }
 
-    method_reject(stream, METHOD_NO_AUTH).await?;
+    write_method(stream, METHOD_NO_AUTH).await?;
 
     let mut buf = [0u8; 4];
     stream.read_exact(&mut buf).await?;
@@ -70,7 +70,7 @@ pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destina
             stream.read_exact(&mut ipv4_addr).await?;
 
             let port = unsafe { *(ipv4_addr.as_ptr().offset(4) as *const u16) };
-            Destination::Address {
+            Destination::Ip4 {
                 address: SocketAddr::V4(SocketAddrV4::new(
                     Ipv4Addr::new(ipv4_addr[3], ipv4_addr[2], ipv4_addr[1], ipv4_addr[0]),
                     u16::from_be(port),
@@ -99,19 +99,19 @@ pub async fn read_destination(stream: &mut TcpStream) -> std::io::Result<Destina
 }
 
 
-pub async fn destination_unreached(stream: &mut TcpStream) -> std::io::Result<()> {
+pub async fn write_dest_unreached(stream: &mut TcpStream) -> std::io::Result<()> {
     let dest = SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0));
-    destination_result(stream, dest, REP_FAILURE).await
+    write_dest_result(stream, dest, REP_FAILURE).await
 }
 
-pub async fn destination_connected(
+pub async fn write_dest_connected(
     stream: &mut TcpStream,
     dest: SocketAddr,
 ) -> std::io::Result<()> {
-    destination_result(stream, dest, REP_SUCCESS).await
+    write_dest_result(stream, dest, REP_SUCCESS).await
 }
 
-async fn destination_result(
+async fn write_dest_result(
     stream: &mut TcpStream,
     dest: SocketAddr,
     rsp: u8,

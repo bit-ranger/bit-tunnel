@@ -65,13 +65,13 @@ async fn run_entry(
     mut stream: TcpStream,
     entry: Entry,
 ) {
-    match socks5::read_destination(&mut stream).await {
-        Ok(socks5::Destination::Address{
+    match socks5::read_dest(&mut stream).await {
+        Ok(socks5::Destination::Ip4 {
                address
            }) => {
             let mut buf = Vec::new();
             let _ = std::io::Write::write_fmt(&mut buf, format_args!("{}", address));
-            entry.connect_address(buf).await;
+            entry.connect_ip4(buf).await;
         }
 
         Ok(socks5::Destination::DomainName{
@@ -93,10 +93,10 @@ async fn run_entry(
     };
 
     let success = match address {
-        Some(address) => socks5::destination_connected(&mut stream, address)
+        Some(address) => socks5::write_dest_connected(&mut stream, address)
             .await
             .is_ok(),
-        None => socks5::destination_unreached(&mut stream).await.is_ok() && false,
+        None => socks5::write_dest_unreached(&mut stream).await.is_ok() && false,
     };
 
     if success {

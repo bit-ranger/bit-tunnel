@@ -8,7 +8,7 @@ pub mod cs {
     pub const ENTRY_OPEN: u8 = 1;
     pub const ENTRY_CLOSE: u8 = 2;
     pub const EOF: u8 = 4;
-    pub const CONNECT_IP: u8 = 5;
+    pub const CONNECT_IP4: u8 = 5;
     pub const CONNECT_DOMAIN_NAME: u8 = 6;
     pub const DATA: u8 = 7;
     pub const HEARTBEAT: u8 = 8;
@@ -53,8 +53,8 @@ pub fn pack_cs_entry_open(id: u32) -> [u8; 5] {
     pack_cmd_id(cs::ENTRY_OPEN, id)
 }
 
-pub fn pack_cs_connect(id: u32, data: &[u8]) -> Vec<u8> {
-    pack_cmd_id_data(cs::CONNECT_IP, id, data)
+pub fn pack_cs_connect_ip4(id: u32, data: &[u8]) -> Vec<u8> {
+    pack_cmd_id_data(cs::CONNECT_IP4, id, data)
 }
 
 pub fn pack_cs_connect_domain_name(id: u32, domain: &[u8], port: u16) -> Vec<u8> {

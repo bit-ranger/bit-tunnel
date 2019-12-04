@@ -11,3 +11,5 @@ async-std = { version = "1.2.0", features = ["unstable"] }
 futures-timer = "1.0.2"
 log = { version = "0.4.8", features = ["std"] }
 time = "0.1.42"
+rust-crypto = "0.2.36"
+rand = "0.7.2"

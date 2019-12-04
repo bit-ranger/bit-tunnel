@@ -240,7 +240,7 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
                     .await;
             }
 
-            cs::CONNECT_IP => {
+            cs::CONNECT_IP4 => {
                 let mut len = [0u8; 4];
                 client_stream.read_exact(&mut len).await?;
                 let len = u32::from_be(unsafe { *(len.as_ptr() as *const u32) });
@@ -249,7 +249,7 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
                 client_stream.read_exact(&mut buf).await?;
 
                 tunnel_sender
-                    .send(Message::CS(Cs::ConnectIp(id, buf)))
+                    .send(Message::CS(Cs::ConnectIp4(id, buf)))
                     .await;
             }
 
@@ -362,7 +362,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                     };
                 }
 
-                Cs::ConnectIp(id, address) => {
+                Cs::ConnectIp4(id, address) => {
                     *alive_time = get_time();
 
                     if let Some(value) = entry_map.get(&id) {
@@ -430,7 +430,7 @@ enum Message {
 enum Cs {
     EntryOpen(u32),
     EntryClose(u32),
-    ConnectIp(u32, Vec<u8>),
+    ConnectIp4(u32, Vec<u8>),
     ConnectDomainName(u32, Vec<u8>, u16),
     Eof(u32),
     Data(u32, Vec<u8>),
