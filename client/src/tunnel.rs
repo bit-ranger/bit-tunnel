@@ -371,7 +371,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
 
                     match entry_map.get(&id) {
                         Some(value) => {
-                            info!("{}.{}: connect {}:{} ok", tid, id, value.host, value.port);
+                            info!("{}.{}: connect ok {}:{}", tid, id, value.host, value.port);
 
                             value.sender.send(EntryMessage::ConnectOk(buf)).await;
                         }

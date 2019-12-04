@@ -15,6 +15,7 @@ use common::protocol::{cs, VERIFY_DATA, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat
 use common::timer;
 use common::cryptor::Cryptor;
 use crate::config::Config;
+use log::{info};
 
 
 pub struct TcpTunnel;
@@ -142,22 +143,42 @@ async fn entry_to_dest_stream(entry: &Entry, dest_stream: &mut &TcpStream) {
 async fn entry_task(entry: Entry) {
     let dest_stream = match entry.read().await {
         EntryMessage::ConnectIp(buf) => {
-            TcpStream::connect(from_utf8(&buf).unwrap()).await.ok()
+            let ip = from_utf8(&buf).unwrap();
+            match TcpStream::connect(ip).await{
+                Ok(stream) => {
+                    info!("connect success {}", ip);
+                    Some(stream)
+                }
+                Err(_) => {
+                    info!("connect failed {}", ip);
+                    None
+                }
+            }
         }
 
         EntryMessage::ConnectDomainName(domain_name, port) => {
-            TcpStream::connect((from_utf8(&domain_name).unwrap(), port))
-                .await
-                .ok()
-        }
+            let domain_name = from_utf8(&domain_name).unwrap();
+            match TcpStream::connect((domain_name, port)).await{
+                Ok(stream) => {
+                    info!("connect success {}:{}", domain_name, port);
+                    Some(stream)
+                }
+                Err(_) => {
+                    info!("connect failed {}:{}", domain_name, port);
+                    None
+                }
+            }
 
+        }
         _ => None,
     };
 
-    let dest_stream = match dest_stream {
-        Some(s) => s,
-        None => return entry.close().await,
-    };
+    if let None =  dest_stream{
+        entry.close().await;
+        return;
+    }
+
+    let dest_stream = dest_stream.unwrap();
 
     match dest_stream.local_addr() {
         Ok(address) => {
