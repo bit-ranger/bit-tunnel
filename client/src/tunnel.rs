@@ -291,7 +291,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         }
 
                         None => {
-                            info!("{}.{}: client eof unknown server", tid, id);
+                            info!("{}.{}: client eof repeated", tid, id);
                         }
                     }
 
@@ -312,7 +312,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         }
 
                         None => {
-                            info!("{}.{}: client close unknown server", tid, id);
+                            info!("{}.{}: client close repeated", tid, id);
                         }
                     }
 
@@ -340,7 +340,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         }
 
                         None => {
-                            info!("{}.{}: server close unknown client", tid, id);
+                            info!("{}.{}: server close repeated", tid, id);
                         }
                     }
 
@@ -353,7 +353,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                     match entry_map.get(&id) {
                         Some(entry) => {
                             info!(
-                                "{}.{}: server shutdown write {}:{}",
+                                "{}.{}: server eof {}:{}",
                                 tid, id, entry.host, entry.port
                             );
 
@@ -361,7 +361,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         }
 
                         None => {
-                            info!("{}.{}: server shutdown write unknown client", tid, id);
+                            info!("{}.{}: server eof unknown client", tid, id);
                         }
                     }
                 }
