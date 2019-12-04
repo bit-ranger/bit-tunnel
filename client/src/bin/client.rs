@@ -151,7 +151,7 @@ fn main() {
 
     let mut opts = getopts::Options::new();
     opts.reqopt("s", "server", "server address", "server-address");
-    opts.reqopt("m", "tunnel-max", "tunnel max", "tunnel-max");
+    opts.optopt("m", "tunnel-max", "tunnel max", "tunnel-max");
     opts.optopt("l", "listen", "listen address", "listen-address");
     opts.optopt("", "log", "log path", "log-path");
     opts.optopt("k", "key", "key", "key");
@@ -165,7 +165,7 @@ fn main() {
     };
 
     let server_addr = matches.opt_str("s").unwrap();
-    let tunnel_max = matches.opt_str("c").unwrap_or(String::from("2"));
+    let tunnel_max = matches.opt_str("m").unwrap_or(String::from("2"));
     let log_path = matches.opt_str("log").unwrap_or(String::from("/var/log/bit-tunnel/client.log"));
     let listen_addr = matches.opt_str("l").unwrap_or("127.0.0.1:1080".to_string());
     let key = matches.opt_str("k").unwrap_or("123456".to_string());
