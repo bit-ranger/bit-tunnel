@@ -146,17 +146,9 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
 ) -> std::io::Result<()> {
 
     let mut ctr = vec![0; Cryptor::ctr_size()];
-    stream.read_exact(&mut ctr).await?;
+    server_stream.read_exact(&mut ctr).await?;
 
-    let mut cryptor = Cryptor::with_ctr(&key, ctr);
-
-    let mut buf = vec![0; VERIFY_DATA.len()];
-    stream.read_exact(&mut buf).await?;
-
-    let data = decryptor.decrypt(&buf);
-    if &data != &VERIFY_DATA {
-        return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
-    }
+    let mut cryptor = Cryptor::with_ctr(config.get_key(), ctr);
 
     loop {
         let mut op = [0u8; 1];

@@ -14,32 +14,31 @@ use time::{get_time, Timespec};
 use common::protocol::{cs, VERIFY_DATA, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat, pack_sc_entry_close, pack_sc_eof, pack_sc_connect_ok, pack_sc_data};
 use common::timer;
 use log::{info};
-
-
-
-
+use common::cryptor::Cryptor;
+use crate::config::Config;
 
 
 pub struct TcpTunnel;
 impl TcpTunnel {
-    pub fn new(client_stream: TcpStream) {
+    pub fn new(config: &Config, client_stream: TcpStream) {
+        let config  = config.clone();
         task::spawn(async move {
-            TcpTunnel::task(client_stream).await;
+            TcpTunnel::task(&config, client_stream).await;
         });
     }
 
-    async fn task(client_stream: TcpStream) {
+    async fn task(config: &Config, client_stream: TcpStream) {
         let (tunnel_sender, tunnel_receiver) = channel(10000);
 
         let mut entry_map = EntryMap::new();
         let (client_stream0, client_stream1) = &mut (&client_stream, &client_stream);
         let r = async {
-            let _ = client_stream_to_tunnel( client_stream0, tunnel_sender.clone()).await;
+            let _ = client_stream_to_tunnel( config, client_stream0, tunnel_sender.clone()).await;
             tunnel_sender.send(Message::SC(Sc::CloseTunnel)).await;
             let _ = client_stream.shutdown(Shutdown::Both);
         };
         let w = async {
-            let _ = tunnel_to_client_stream(tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
+            let _ = tunnel_to_client_stream(config, tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
                 .await;
             let _ = client_stream.shutdown(Shutdown::Both);
         };
@@ -185,14 +184,21 @@ async fn entry_task(entry: Entry) {
 
 
 async fn client_stream_to_tunnel<R: Read + Unpin>(
+    config: &Config,
     client_stream: &mut R,
     tunnel_sender: Sender<Message>
 ) -> std::io::Result<()> {
 
+    let mut ctr = vec![0; Cryptor::ctr_size()];
+    client_stream.read_exact(&mut ctr).await?;
+
+    let mut cryptor = Cryptor::with_ctr(config.get_key(), ctr);
+
     let mut buf = vec![0; VERIFY_DATA.len()];
     client_stream.read_exact(&mut buf).await?;
 
-    if &buf != &VERIFY_DATA {
+    let data = cryptor.decrypt(&buf);
+    if &data != &VERIFY_DATA {
         return Err(std::io::Error::from(std::io::ErrorKind::InvalidInput));
     }
 
@@ -232,7 +238,7 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
                 client_stream.read_exact(&mut buf).await?;
 
                 let pos = (len - 2) as usize;
-                let domain_name = Vec::from(&buf[0..pos]);
+                let domain_name = cryptor.decrypt(&buf[0..pos]);
                 let port = u16::from_be(unsafe { *(buf[pos..].as_ptr() as *const u16) });
 
                 tunnel_sender
@@ -248,8 +254,9 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
                 let mut buf = vec![0; len as usize];
                 client_stream.read_exact(&mut buf).await?;
 
+                let data = cryptor.decrypt(&buf);
                 tunnel_sender
-                    .send(Message::CS(Cs::ConnectIp4(id, buf)))
+                    .send(Message::CS(Cs::ConnectIp4(id, data)))
                     .await;
             }
 
@@ -261,13 +268,15 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
                 let mut buf = vec![0; len as usize];
                 client_stream.read_exact(&mut buf).await?;
 
-                tunnel_sender.send(Message::CS(Cs::Data(id, buf))).await;
+                let data = cryptor.decrypt(&buf);
+                tunnel_sender.send(Message::CS(Cs::Data(id, data))).await;
             }
         }
     }
 }
 
 async fn tunnel_to_client_stream<W: Write + Unpin>(
+    config: &Config,
     tunnel_sender: Sender<Message>,
     tunnel_receiver: Receiver<Message>,
     entry_map: &mut EntryMap,
@@ -277,6 +286,9 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
     let duration = Duration::from_millis(HEARTBEAT_INTERVAL_MS as u64);
     let timer_stream = timer::interval(duration, Message::SC(Sc::Heartbeat));
     let mut msg_stream = timer_stream.merge(tunnel_receiver);
+
+    let mut cryptor = Cryptor::new(config.get_key());
+    client_stream.write_all(cryptor.ctr_as_slice()).await?;
 
     loop {
         match msg_stream.next().await {
@@ -290,6 +302,7 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
                     &mut alive_time,
                     entry_map,
                     client_stream,
+                    &mut cryptor
                 )
                 .await?;
             }
@@ -307,6 +320,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
     alive_time: &mut Timespec,
     entry_map: &mut EntryMap,
     client_stream: &mut W,
+    cryptor: &mut Cryptor
 ) -> std::io::Result<()> {
     match msg {
 
@@ -401,11 +415,13 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 }
 
                 Sc::ConnectOk(id, buf) => {
-                    client_stream.write_all(&pack_sc_connect_ok(id, &buf)).await?;
+                    let data = cryptor.encrypt(&buf);
+                    client_stream.write_all(&pack_sc_connect_ok(id, &data)).await?;
                 }
 
                 Sc::Data(id, buf) => {
-                    client_stream.write_all(&pack_sc_data(id, &buf)).await?;
+                    let data = cryptor.encrypt(&buf);
+                    client_stream.write_all(&pack_sc_data(id, &data)).await?;
                 }
 
                 _ => {}
