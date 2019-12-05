@@ -8,7 +8,7 @@ use async_std::prelude::*;
 use std::collections::HashMap;
 use common::timer;
 use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect_ip4, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
-use log::{info, error};
+use log::{info, error, warn};
 use time::{get_time, Timespec};
 use crate::config::Config;
 use common::cryptor::Cryptor;
@@ -139,7 +139,7 @@ impl TcpTunnel {
         };
         let _ = r.join(w).await;
 
-        info!("{}: tunnel broken", tunnel_id);
+        warn!("{}: tunnel broken", tunnel_id);
 
         for (_, value) in entry_map.iter() {
             value.sender.send(EntryMessage::Close).await;

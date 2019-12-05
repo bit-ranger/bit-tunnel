@@ -15,7 +15,7 @@ use common::protocol::{cs, VERIFY_DATA, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat
 use common::timer;
 use common::cryptor::Cryptor;
 use crate::config::Config;
-use log::{info, error};
+use log::{info, error, warn};
 
 
 pub struct TcpTunnel;
@@ -46,14 +46,14 @@ impl TcpTunnel {
 
         let r = async {
             let cstt = client_stream_to_tunnel(config, client_stream0, tunnel_sender.clone()).await;
-            info!("{}: tunnel broken, cstt {:?}", tunnel_id, cstt.err());
+            warn!("{}: tunnel broken, cstt {:?}", tunnel_id, cstt.err());
             tunnel_sender.send(Message::SC(Sc::CloseTunnel)).await;
             let _ = client_stream.shutdown(Shutdown::Both);
         };
         let w = async {
             let ttcs = tunnel_to_client_stream(config, tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
                 .await;
-            info!("{}: tunnel broken, ttcs {:?}", tunnel_id, ttcs.err());
+            warn!("{}: tunnel broken, ttcs {:?}", tunnel_id, ttcs.err());
             let _ = client_stream.shutdown(Shutdown::Both);
         };
         let _ = r.join(w).await;
