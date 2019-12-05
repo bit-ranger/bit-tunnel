@@ -45,13 +45,13 @@ impl TcpTunnel {
         let mut entry_map = EntryMap::new();
 
         let r = async {
-            let cstt = client_stream_to_tunnel(config, client_stream0, tunnel_sender.clone()).await;
+            let cstt = client_stream_to_tunnel(config, tunnel_id, client_stream0, tunnel_sender.clone()).await;
             warn!("{}: tunnel broken, cstt {:?}", tunnel_id, cstt.err());
             tunnel_sender.send(Message::SC(Sc::CloseTunnel)).await;
             let _ = client_stream.shutdown(Shutdown::Both);
         };
         let w = async {
-            let ttcs = tunnel_to_client_stream(config, tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
+            let ttcs = tunnel_to_client_stream(config, tunnel_id, tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
                 .await;
             warn!("{}: tunnel broken, ttcs {:?}", tunnel_id, ttcs.err());
             let _ = client_stream.shutdown(Shutdown::Both);
@@ -67,6 +67,7 @@ impl TcpTunnel {
 
 pub struct Entry {
     id: u32,
+    tunnel_id: u32,
     tunnel_sender: Sender<Message>,
     entry_receiver: Receiver<EntryMessage>,
 }
@@ -157,11 +158,11 @@ async fn entry_task(entry: Entry) {
             let ip = from_utf8(&buf).unwrap();
             match TcpStream::connect(ip).await {
                 Ok(stream) => {
-                    info!("connect success {}", ip);
+                    info!("{}.{}: connect ok, {}", entry.tunnel_id, entry.id, ip);
                     Some(stream)
                 }
-                Err(_) => {
-                    info!("connect failed {}", ip);
+                Err(e) => {
+                    warn!("{}.{}: connect failed, {}, {}", entry.tunnel_id, entry.id, ip, e);
                     None
                 }
             }
@@ -171,11 +172,11 @@ async fn entry_task(entry: Entry) {
             let domain_name = from_utf8(&domain_name).unwrap();
             match TcpStream::connect((domain_name, port)).await {
                 Ok(stream) => {
-                    info!("connect success {}:{}", domain_name, port);
+                    info!("{}.{}: connect ok, {}:{}", entry.tunnel_id, entry.id, domain_name, port);
                     Some(stream)
                 }
-                Err(_) => {
-                    info!("connect failed {}:{}", domain_name, port);
+                Err(e) => {
+                    warn!("{}.{}: connect failed, {}:{}, {}", entry.tunnel_id, entry.id, domain_name, port, e);
                     None
                 }
             }
@@ -213,6 +214,7 @@ async fn entry_task(entry: Entry) {
 
 async fn client_stream_to_tunnel<R: Read + Unpin>(
     config: &Config,
+    _tunnel_id: u32,
     client_stream: &mut R,
     tunnel_sender: Sender<Message>,
 ) -> std::io::Result<()> {
@@ -304,6 +306,7 @@ async fn client_stream_to_tunnel<R: Read + Unpin>(
 
 async fn tunnel_to_client_stream<W: Write + Unpin>(
     config: &Config,
+    tunnel_id: u32,
     tunnel_sender: Sender<Message>,
     tunnel_receiver: Receiver<Message>,
     entry_map: &mut EntryMap,
@@ -323,6 +326,7 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
 
             Some(msg) => {
                 process_tunnel_message(
+                    tunnel_id,
                     msg,
                     &tunnel_sender,
                     &mut alive_time,
@@ -341,6 +345,7 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
 }
 
 async fn process_tunnel_message<W: Write + Unpin>(
+    tunnel_id: u32,
     msg: Message,
     tunnel_sender: &Sender<Message>,
     alive_time: &mut Timespec,
@@ -363,6 +368,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
 
                     let entry = Entry {
                         id,
+                        tunnel_id,
                         tunnel_sender: tunnel_sender.clone(),
                         entry_receiver: er,
                     };
