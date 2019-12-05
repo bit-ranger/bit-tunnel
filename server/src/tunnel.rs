@@ -15,31 +15,45 @@ use common::protocol::{cs, VERIFY_DATA, HEARTBEAT_INTERVAL_MS, pack_sc_heartbeat
 use common::timer;
 use common::cryptor::Cryptor;
 use crate::config::Config;
-use log::{info};
+use log::{info, error};
 
 
 pub struct TcpTunnel;
+
 impl TcpTunnel {
     pub fn new(config: &Config, client_stream: TcpStream) {
-        let config  = config.clone();
+        let config = config.clone();
         task::spawn(async move {
             TcpTunnel::task(&config, client_stream).await;
         });
     }
 
     async fn task(config: &Config, client_stream: TcpStream) {
-        let (tunnel_sender, tunnel_receiver) = channel(10000);
 
-        let mut entry_map = EntryMap::new();
         let (client_stream0, client_stream1) = &mut (&client_stream, &client_stream);
+
+        let mut tid_bytes_be = [0u8; 4];
+        let read_tid =  client_stream0.read_exact(&mut tid_bytes_be).await;
+        if let Err(e) = read_tid{
+            error!("tunnel connect error, {}", e);
+            return;
+        };
+        let tunnel_id:u32 = u32::from_be_bytes(tid_bytes_be);
+        info!("{}: tunnel connect ok", tunnel_id);
+
+        let (tunnel_sender, tunnel_receiver) = channel(10000);
+        let mut entry_map = EntryMap::new();
+
         let r = async {
-            let _ = client_stream_to_tunnel( config, client_stream0, tunnel_sender.clone()).await;
+            let cstt = client_stream_to_tunnel(config, client_stream0, tunnel_sender.clone()).await;
+            info!("{}: tunnel broken, cstt {:?}", tunnel_id, cstt.err());
             tunnel_sender.send(Message::SC(Sc::CloseTunnel)).await;
             let _ = client_stream.shutdown(Shutdown::Both);
         };
         let w = async {
-            let _ = tunnel_to_client_stream(config, tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
+            let ttcs = tunnel_to_client_stream(config, tunnel_sender.clone(), tunnel_receiver, &mut entry_map, client_stream1)
                 .await;
+            info!("{}: tunnel broken, ttcs {:?}", tunnel_id, ttcs.err());
             let _ = client_stream.shutdown(Shutdown::Both);
         };
         let _ = r.join(w).await;
@@ -58,10 +72,7 @@ pub struct Entry {
 }
 
 
-
-
 impl Entry {
-
     async fn connect_ok(&self, buf: Vec<u8>) {
         self.tunnel_sender.send(Message::SC(Sc::ConnectOk(self.id, buf))).await;
     }
@@ -144,7 +155,7 @@ async fn entry_task(entry: Entry) {
     let dest_stream = match entry.read().await {
         EntryMessage::ConnectIp(buf) => {
             let ip = from_utf8(&buf).unwrap();
-            match TcpStream::connect(ip).await{
+            match TcpStream::connect(ip).await {
                 Ok(stream) => {
                     info!("connect success {}", ip);
                     Some(stream)
@@ -158,7 +169,7 @@ async fn entry_task(entry: Entry) {
 
         EntryMessage::ConnectDomainName(domain_name, port) => {
             let domain_name = from_utf8(&domain_name).unwrap();
-            match TcpStream::connect((domain_name, port)).await{
+            match TcpStream::connect((domain_name, port)).await {
                 Ok(stream) => {
                     info!("connect success {}:{}", domain_name, port);
                     Some(stream)
@@ -168,12 +179,11 @@ async fn entry_task(entry: Entry) {
                     None
                 }
             }
-
         }
         _ => None,
     };
 
-    if let None =  dest_stream{
+    if let None = dest_stream {
         entry.close().await;
         return;
     }
@@ -201,13 +211,11 @@ async fn entry_task(entry: Entry) {
 }
 
 
-
 async fn client_stream_to_tunnel<R: Read + Unpin>(
     config: &Config,
     client_stream: &mut R,
-    tunnel_sender: Sender<Message>
+    tunnel_sender: Sender<Message>,
 ) -> std::io::Result<()> {
-
     let mut ctr = vec![0; Cryptor::ctr_size()];
     client_stream.read_exact(&mut ctr).await?;
 
@@ -311,7 +319,6 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
 
     loop {
         match msg_stream.next().await {
-
             Some(Message::SC(Sc::CloseTunnel)) => break,
 
             Some(msg) => {
@@ -321,9 +328,9 @@ async fn tunnel_to_client_stream<W: Write + Unpin>(
                     &mut alive_time,
                     entry_map,
                     client_stream,
-                    &mut cryptor
+                    &mut cryptor,
                 )
-                .await?;
+                    .await?;
             }
 
             None => break,
@@ -339,10 +346,9 @@ async fn process_tunnel_message<W: Write + Unpin>(
     alive_time: &mut Timespec,
     entry_map: &mut EntryMap,
     client_stream: &mut W,
-    cryptor: &mut Cryptor
+    cryptor: &mut Cryptor,
 ) -> std::io::Result<()> {
     match msg {
-
         Message::CS(cs) => {
             match cs {
                 Cs::Heartbeat => {
@@ -353,12 +359,12 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 Cs::EntryOpen(id) => {
                     *alive_time = get_time();
                     let (es, er) = channel(1000);
-                    entry_map.insert(id, EntryInternal {sender: es});
+                    entry_map.insert(id, EntryInternal { sender: es });
 
-                    let entry = Entry{
+                    let entry = Entry {
                         id,
                         tunnel_sender: tunnel_sender.clone(),
-                        entry_receiver: er
+                        entry_receiver: er,
                     };
 
                     task::spawn(async move {
@@ -406,19 +412,17 @@ async fn process_tunnel_message<W: Write + Unpin>(
                     };
                 }
 
-                Cs::Data( id, buf) => {
+                Cs::Data(id, buf) => {
                     *alive_time = get_time();
 
                     if let Some(value) = entry_map.get(&id) {
-                        value.sender.send(EntryMessage::Data( buf)).await;
+                        value.sender.send(EntryMessage::Data(buf)).await;
                     };
                 }
-
             }
         }
 
         Message::SC(sc) => {
-
             match sc {
                 Sc::EntryClose(id) => {
                     if let Some(value) = entry_map.get(&id) {
@@ -445,8 +449,6 @@ async fn process_tunnel_message<W: Write + Unpin>(
 
                 _ => {}
             }
-
-
         }
     }
 
@@ -454,11 +456,10 @@ async fn process_tunnel_message<W: Write + Unpin>(
 }
 
 
-
 #[derive(Clone)]
 enum Message {
     CS(Cs),
-    SC(Sc)
+    SC(Sc),
 }
 
 #[derive(Clone)]
@@ -473,16 +474,16 @@ enum Cs {
 }
 
 #[derive(Clone)]
-enum Sc{
+enum Sc {
     EntryClose(u32),
     Eof(u32),
     ConnectOk(u32, Vec<u8>),
     Data(u32, Vec<u8>),
     Heartbeat,
-    CloseTunnel
+    CloseTunnel,
 }
 
-pub enum EntryMessage{
+pub enum EntryMessage {
     ConnectIp(Vec<u8>),
     ConnectDomainName(Vec<u8>, u16),
     Data(Vec<u8>),

@@ -8,7 +8,7 @@ use async_std::prelude::*;
 use std::collections::HashMap;
 use common::timer;
 use common::protocol::{sc, HEARTBEAT_INTERVAL_MS, VERIFY_DATA, pack_cs_heartbeat, pack_cs_entry_open, pack_cs_connect_ip4, pack_cs_connect_domain_name, pack_cs_eof, pack_cs_data, pack_cs_entry_close};
-use log::{info};
+use log::{info, error};
 use time::{get_time, Timespec};
 use crate::config::Config;
 use common::cryptor::Cryptor;
@@ -117,10 +117,18 @@ impl TcpTunnel {
                 return;
             }
         };
+
+        let (server_stream0, server_stream1) = &mut (&server_stream, &server_stream);
+
+        let write_tid = server_stream0.write_all(&tunnel_id.to_be_bytes()).await;
+        if let Err(e) = write_tid {
+            error!("tunnel connect error, {}", e);
+            return;
+        }
         info!("{}: tunnel connect ok", tunnel_id);
 
         let mut entry_map = EntryMap::new();
-        let (server_stream0, server_stream1) = &mut (&server_stream, &server_stream);
+
         let r = async {
             let _ = server_stream_to_tunnel(config, server_stream0, tunnel_sender.clone()).await;
             let _ = server_stream.shutdown(Shutdown::Both);
