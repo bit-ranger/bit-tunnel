@@ -9,20 +9,21 @@ bit-tunnel - 一个轻量快速的网络隧道软件
 
 ## 二进制安装
     
-    64位windows用户可直接下载x86_64-win.zip
-    https://github.com/bit-ranger/bit-tunnel/releases
+64位windows用户可直接下载x86_64-win.zip
+
+[https://github.com/bit-ranger/bit-tunnel/releases](https://github.com/bit-ranger/bit-tunnel/releases)
 
 ## 源码安装
 
-### 安装Rust
+安装Rust
 
-    https://www.rust-lang.org/zh-CN/tools/install
+[https://www.rust-lang.org/zh-CN/tools/install](https://www.rust-lang.org/zh-CN/tools/install)
     
-### 获取代码
+获取代码
 
     git clone git@github.com:bit-ranger/bit-tunnel.git
     
-### 生成可执行文件
+生成可执行文件
 
     cargo build --release
 
@@ -43,6 +44,7 @@ bit-tunnel - 一个轻量快速的网络隧道软件
      -k 密钥, 默认值: 123456
          
 ### 服务端
+
     server.exe 
     
     必填参数
