@@ -15,35 +15,35 @@ bit-tunnel - 一个轻量快速的网络隧道软件
 
 ## 源码安装
 
-安装Rust
+#### 安装Rust
 
 [https://www.rust-lang.org/zh-CN/tools/install](https://www.rust-lang.org/zh-CN/tools/install)
     
-获取代码
+#### 获取代码
 
     git clone git@github.com:bit-ranger/bit-tunnel.git
     
-生成可执行文件
+#### 生成可执行文件
 
     cargo build --release
 
     
 ## 使用
 
-### 客户端
+#### 客户端
     
     client.exe 
      
-     必填参数
-     -s 服务端地址
+    必填参数
+    -s 服务端地址
+        
+    可选参数
+    -m 最大隧道数量, 默认值: 2
+    -l 监听地址, 默认值: 127.0.0.1:1080
+    --log 日志路径, 默认值: /var/log/bit-tunnel/client.log
+    -k 密钥, 默认值: 123456
          
-     可选参数
-     -m 最大隧道数量, 默认值: 2
-     -l 监听地址, 默认值: 127.0.0.1:1080
-     --log 日志路径, 默认值: /var/log/bit-tunnel/client.log
-     -k 密钥, 默认值: 123456
-         
-### 服务端
+#### 服务端
 
     server.exe 
     
