@@ -1,8 +1,8 @@
 # bit-tunnel
 
-![GitHub Workflow](https://img.shields.io/github/workflow/status/bit-ranger/bit-tunnel/Rust)
+[![GitHub Workflow](https://img.shields.io/github/workflow/status/bit-ranger/bit-tunnel/Rust)](https://github.com/bit-ranger/bit-tunnel/actions)
 [![GitHub Release](https://img.shields.io/github/v/release/bit-ranger/bit-tunnel?include_prereleases)](https://github.com/bit-ranger/markdown-to-kindle/releases/latest)
-![License](https://img.shields.io/github/license/bit-ranger/bit-tunnel)
+[![License](https://img.shields.io/github/license/bit-ranger/bit-tunnel)](https://github.com/bit-ranger/bit-tunnel/blob/master/LICENSE)
 
 bit-tunnel - 一个轻量快速的网络隧道软件
 
