@@ -28,13 +28,12 @@ impl Tunnel {
         let (entry_sender, entry_receiver) = channel(999);
         self.sender.send(Message::CS(Cs::EntryOpen(entry_id, entry_sender))).await;
 
-        (
-            Entry {
-                id: entry_id,
-                tunnel_sender: self.sender.clone(),
-                entry_receiver,
-            }
-        )
+        Entry {
+            id: entry_id,
+            tunnel_sender: self.sender.clone(),
+            entry_receiver,
+        }
+
     }
 }
 
