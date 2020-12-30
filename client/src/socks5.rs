@@ -1,7 +1,6 @@
 use async_std::net::TcpStream;
 use async_std::prelude::*;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
-use std::io::Read;
 
 
 pub enum Destination {
