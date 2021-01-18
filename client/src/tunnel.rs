@@ -1,6 +1,6 @@
 use std::net::{Shutdown};
 use async_std::net::TcpStream;
-use async_std::sync::{channel, Receiver, Sender};
+use async_std::channel::{bounded, Receiver, Sender};
 use async_std::task;
 use std::time::Duration;
 use async_std::io::{Read, Write};
@@ -25,8 +25,8 @@ impl Tunnel {
     pub async fn open_entry(&mut self) -> Entry {
         let entry_id = self.entry_id_current;
         self.entry_id_current += 1;
-        let (entry_sender, entry_receiver) = channel(999);
-        self.sender.send(Message::CS(Cs::EntryOpen(entry_id, entry_sender))).await;
+        let (entry_sender, entry_receiver) = bounded(999);
+        let _ = self.sender.send(Message::CS(Cs::EntryOpen(entry_id, entry_sender))).await;
 
         Entry {
             id: entry_id,
@@ -47,31 +47,31 @@ pub struct Entry {
 impl Entry {
 
     pub async fn write(&self, buf: Vec<u8>) {
-        self.tunnel_sender.send(Message::CS(Cs::Data(self.id, buf))).await;
+        let _ = self.tunnel_sender.send(Message::CS(Cs::Data(self.id, buf))).await;
     }
 
     pub async fn connect_ip4(&self, address: Vec<u8>) {
-        self.tunnel_sender.send(Message::CS(Cs::ConnectIp4(self.id, address))).await;
+        let _ = self.tunnel_sender.send(Message::CS(Cs::ConnectIp4(self.id, address))).await;
     }
 
     pub async fn connect_domain_name(&self, domain_name: Vec<u8>, port: u16) {
-        self.tunnel_sender
+        let _ = self.tunnel_sender
             .send(Message::CS(Cs::ConnectDomainName(self.id, domain_name, port)))
             .await;
     }
 
     pub async fn eof(&self) {
-        self.tunnel_sender.send(Message::CS(Cs::Eof(self.id))).await;
+        let _ = self.tunnel_sender.send(Message::CS(Cs::Eof(self.id))).await;
     }
 
     pub async fn close(&self) {
-        self.tunnel_sender.send(Message::CS(Cs::EntryClose(self.id))).await;
+        let _ = self.tunnel_sender.send(Message::CS(Cs::EntryClose(self.id))).await;
     }
 
     pub async fn read(&self) -> EntryMessage {
         match self.entry_receiver.recv().await {
-            Some(msg) => msg,
-            None => EntryMessage::Close,
+            Ok(msg) => msg,
+            Err(_) => EntryMessage::Close,
         }
     }
 }
@@ -80,7 +80,7 @@ pub struct TcpTunnel;
 
 impl TcpTunnel {
     pub fn new(config: &Config, tunnel_id: u32) -> Tunnel {
-        let (s, r) = channel(10000);
+        let (s, r) = bounded(10000);
         let s1 = s.clone();
         let config = config.clone();
         task::spawn(async move {
@@ -141,7 +141,7 @@ impl TcpTunnel {
         warn!("{}: tunnel broken", tunnel_id);
 
         for (_, value) in entry_map.iter() {
-            value.sender.send(EntryMessage::Close).await;
+            let _ = value.sender.send(EntryMessage::Close).await;
         }
     }
 }
@@ -165,7 +165,7 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
         let op = op[0];
 
         if op == sc::HEARTBEAT {
-            tunnel_sender.send(Message::SC(Sc::Heartbeat)).await;
+            let _ = tunnel_sender.send(Message::SC(Sc::Heartbeat)).await;
             continue;
         }
 
@@ -175,11 +175,11 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
 
         match op {
             sc::ENTRY_CLOSE => {
-                tunnel_sender.send(Message::SC(Sc::EntryClose(id))).await;
+                let _ = tunnel_sender.send(Message::SC(Sc::EntryClose(id))).await;
             }
 
             sc::EOF => {
-                tunnel_sender.send(Message::SC(Sc::Eof(id))).await;
+                let _ = tunnel_sender.send(Message::SC(Sc::Eof(id))).await;
             }
 
             sc::CONNECT_OK | sc::DATA => {
@@ -193,9 +193,9 @@ async fn server_stream_to_tunnel<R: Read + Unpin>(
                 let data = cryptor.decrypt(&buf);
 
                 if op == sc::CONNECT_OK {
-                    tunnel_sender.send(Message::SC(Sc::ConnectOk(id, data))).await;
+                    let _ = tunnel_sender.send(Message::SC(Sc::ConnectOk(id, data))).await;
                 } else {
-                    tunnel_sender.send(Message::SC(Sc::Data(id, data))).await;
+                    let _ = tunnel_sender.send(Message::SC(Sc::Data(id, data))).await;
                 }
             }
 
@@ -314,7 +314,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                     match entry_map.get(&id) {
                         Some(value) => {
                             info!("{}.{}: client close {}:{}", tid, id, value.host, value.port);
-                            value.sender.send(EntryMessage::Close).await;
+                            let _ = value.sender.send(EntryMessage::Close).await;
                             server_stream.write_all(&pack_cs_entry_close(id)).await?;
                         }
 
@@ -343,7 +343,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         Some(entry) => {
                             info!("{}.{}: server close {}:{}", tid, id, entry.host, entry.port);
 
-                            entry.sender.send(EntryMessage::Close).await;
+                            let _ = entry.sender.send(EntryMessage::Close).await;
                         }
 
                         None => {
@@ -364,7 +364,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                                 tid, id, entry.host, entry.port
                             );
 
-                            entry.sender.send(EntryMessage::Eof).await;
+                            let _ = entry.sender.send(EntryMessage::Eof).await;
                         }
 
                         None => {
@@ -380,7 +380,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                         Some(value) => {
                             info!("{}.{}: connect ok {}:{}", tid, id, value.host, value.port);
 
-                            value.sender.send(EntryMessage::ConnectOk(buf)).await;
+                            let _ = value.sender.send(EntryMessage::ConnectOk(buf)).await;
                         }
 
                         None => {
@@ -393,7 +393,7 @@ async fn process_tunnel_message<W: Write + Unpin>(
                 Sc::Data(id, buf) => {
                     *alive_time = get_time();
                     if let Some(value) = entry_map.get(&id) {
-                        value.sender.send(EntryMessage::Data(buf)).await;
+                        let _ = value.sender.send(EntryMessage::Data(buf)).await;
                     };
                 }
             }
