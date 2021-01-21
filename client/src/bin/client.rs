@@ -100,9 +100,9 @@ async fn run_entry(
     };
 
     if success {
-        let (stream0, stream1) = &mut (&stream, &stream);
-        let r = local_stream_to_entry(stream0, &entry);
-        let w = entry_to_local_stream(&entry, stream1);
+        let (local0, local1) = &mut (&stream, &stream);
+        let r = local_stream_to_entry(local0, &entry);
+        let w = entry_to_local_stream(&entry, local1);
         let _ = r.join(w).await;
     } else {
         let _ = stream.shutdown(Shutdown::Both);

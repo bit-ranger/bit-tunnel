@@ -22,9 +22,9 @@ const CMD_CONNECT: u8 = 1;
 const METHOD_NO_AUTH: u8 = 0;
 const METHOD_NO_ACCEPT: u8 = 0xFF;
 
-const ATYP_IPV4: u8 = 1;
-const ATYP_DOMAINNAME: u8 = 3;
-const ATYP_IPV6: u8 = 4;
+const DEST_IPV4: u8 = 1;
+const DEST_DOMAIN_NAME: u8 = 3;
+const DEST_IPV6: u8 = 4;
 
 const REP_SUCCESS: u8 = 0;
 const REP_FAILURE: u8 = 1;
@@ -58,13 +58,12 @@ pub async fn read_dest(stream: &mut TcpStream) -> std::io::Result<Destination> {
     let mut buf = [0u8; 4];
     stream.read_exact(&mut buf).await?;
 
-
     if buf[1] != CMD_CONNECT {
         return Ok(Destination::Unknown);
     }
 
     let destination = match buf[3] {
-        ATYP_IPV4 => {
+        DEST_IPV4 => {
             let mut ipv4_addr = [0u8; 6];
             stream.read_exact(&mut ipv4_addr).await?;
 
@@ -77,7 +76,7 @@ pub async fn read_dest(stream: &mut TcpStream) -> std::io::Result<Destination> {
             }
         }
 
-        ATYP_DOMAINNAME => {
+        DEST_DOMAIN_NAME => {
             let mut len = [0u8; 1];
             stream.read_exact(&mut len).await?;
 
@@ -90,7 +89,7 @@ pub async fn read_dest(stream: &mut TcpStream) -> std::io::Result<Destination> {
             Destination::DomainName { name: buf, port: u16::from_be(port) }
         }
 
-        ATYP_IPV6 => Destination::Unknown,
+        DEST_IPV6 => Destination::Unknown,
         _ => Destination::Unknown,
     };
 
@@ -122,7 +121,7 @@ async fn write_dest_result(
             buf[0] = VER;
             buf[1] = rsp;
             buf[2] = RSV;
-            buf[3] = ATYP_IPV4;
+            buf[3] = DEST_IPV4;
             unsafe {
                 *(buf.as_ptr().offset(4) as *mut u32) = u32::from(ipv4.ip().clone()).to_be();
                 *(buf.as_ptr().offset(8) as *mut u16) = ipv4.port().to_be();
@@ -137,7 +136,7 @@ async fn write_dest_result(
             buf[0] = VER;
             buf[1] = rsp;
             buf[2] = RSV;
-            buf[3] = ATYP_IPV6;
+            buf[3] = DEST_IPV6;
             unsafe {
                 *(buf.as_ptr().offset(4) as *mut u128) = u128::from(ipv6.ip().clone()).to_be();
                 *(buf.as_ptr().offset(20) as *mut u16) = ipv6.port().to_be();
