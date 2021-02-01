@@ -14,8 +14,8 @@ fn main() {
     let program = args[0].clone();
 
     let mut opts = getopts::Options::new();
-    opts.reqopt("l", "listen", "listen address", "listen-address");
-    opts.optopt("", "log", "log path", "log-path");
+    opts.optopt("l", "listen", "listen address", "listen-address");
+    opts.optopt("o", "log", "log path", "log-path");
     opts.optopt("k", "key", "key", "key");
 
     let matches = match opts.parse(&args[1..]) {
@@ -26,9 +26,9 @@ fn main() {
         }
     };
 
-    let listen_addr = matches.opt_str("l").unwrap();
+    let listen_addr = matches.opt_str("listen").unwrap_or("127.0.0.1:8083".to_string());
     let log_path = matches.opt_str("log").unwrap_or(String::from("/var/log/bit-tunnel/server.log"));
-    let key = matches.opt_str("k").unwrap_or("123456".to_string());
+    let key = matches.opt_str("key").unwrap_or("123456".to_string());
 
     logger::init(log::Level::Info, log_path, 1, 2000000).unwrap();
     info!("starting up");

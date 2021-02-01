@@ -153,7 +153,7 @@ fn main() {
     opts.reqopt("s", "server", "server address", "server-address");
     opts.optopt("m", "tunnel-max", "tunnel max", "tunnel-max");
     opts.optopt("l", "listen", "listen address", "listen-address");
-    opts.optopt("", "log", "log path", "log-path");
+    opts.optopt("o", "log", "log path", "log-path");
     opts.optopt("k", "key", "key", "key");
 
     let matches = match opts.parse(&args[1..]) {
@@ -164,11 +164,11 @@ fn main() {
         }
     };
 
-    let server_addr = matches.opt_str("s").unwrap();
-    let tunnel_max = matches.opt_str("m").unwrap_or(String::from("2"));
+    let server_addr = matches.opt_str("server").unwrap();
+    let tunnel_max = matches.opt_str("tunnel-max").unwrap_or(String::from("2"));
     let log_path = matches.opt_str("log").unwrap_or(String::from("/var/log/bit-tunnel/client.log"));
-    let listen_addr = matches.opt_str("l").unwrap_or("127.0.0.1:1080".to_string());
-    let key = matches.opt_str("k").unwrap_or("123456".to_string());
+    let listen_addr = matches.opt_str("listen").unwrap_or("127.0.0.1:1080".to_string());
+    let key = matches.opt_str("key").unwrap_or("123456".to_string());
 
     let tunnel_max: u32 = match tunnel_max.parse() {
         Err(_) | Ok(0) => {
